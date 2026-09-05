@@ -1,0 +1,3 @@
+[submodule "pico-jxglib"]
+	path = pico-jxglib
+	url = https://github.com/ypsitau/pico-jxglib.git

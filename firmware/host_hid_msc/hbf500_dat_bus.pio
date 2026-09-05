@@ -1,0 +1,93 @@
+.program hbf500_dat_bus_ctrl
+
+; ARM -> PIO:
+;   pio_sm_put_blocking(..., value)
+;
+; value bit = 1:
+;   Input / Hi-Z
+;
+; value bit = 0:
+;   Output / Low
+;
+; 必要なPIO設定:
+;   out_base = DAT0, out_count = 8
+;   set_base = DAT4, set_count = 4
+;   jmp_pin  = CS
+;
+; X:
+;   CS=L中に最後に受理したARM値を保存する。
+;
+; 出力ラッチは常に0。
+; ピン方向だけで Hi-Z / Low を切り替える。
+
+; 起動直後の安全状態:
+; 全ピンの出力ラッチをLowにする。
+; ただし、C++側で起動前に全ピンを入力にしておくこと。
+mov osr, null
+out pins, 8
+
+; 初期値は全bit=1、すなわち全DATをHi-Zにする。
+mov x, ~null
+
+.wrap_target
+loop:
+    ; CS=Hならcs_highへ。
+    jmp pin cs_high
+
+; ------------------------------------------------------------
+; CS=L
+;
+; DAT0-3:
+;   ARM値のbit0-3に従い、Hi-ZまたはLow。
+;
+; DAT4-7:
+;   常に入力、すなわちHi-Z。
+; ------------------------------------------------------------
+cs_low:
+    ; DAT4-7を先に必ず入力へ切り替える。
+    ;
+    ; set_base = DAT4, set_count = 4 が前提。
+    set pindirs, 0
+
+    ; FIFOに値があれば受理する。
+    ; FIFOが空の場合、OSRにはXが入る。
+    pull noblock
+
+    ; CS=L中に最後に得た値を保存する。
+    mov x, osr
+
+    ; value=0 -> output Low
+    ; value=1 -> input Hi-Z
+    ;
+    ; よってpindirsにはvalueの反転値を使う。
+    mov osr, ~x
+
+    ; DAT0-3だけ方向を設定する。
+    ; DAT4-7は上の set pindirs, 0 により入力のまま。
+    out pindirs, 4
+
+    jmp loop
+
+; ------------------------------------------------------------
+; CS=H
+;
+; CS=L中に最後に受理した値Xを使って、
+; DAT0-7をHi-Z / Lowとして制御する。
+;
+; CS=H中にFIFOへ届いた値は破棄する。
+; ------------------------------------------------------------
+cs_high:
+    ; CS=H中に送られたFIFOデータを1件取り出して破棄する。
+    ; Xは変更しないので、CS=L中の最後の値は維持される。
+    pull noblock
+    mov x, osr
+
+    ; Xの反転をpindirsへ設定する。
+    ;
+    ; X bit=0 -> pindirs=1 -> Output Low
+    ; X bit=1 -> pindirs=0 -> Input Hi-Z
+    mov osr, ~x
+    out pindirs, 8
+
+    jmp loop
+.wrap

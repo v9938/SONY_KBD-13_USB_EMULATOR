@@ -1,0 +1,245 @@
+{ 
+	"#comment" : [ 
+		"ファイルサイズは32KByte以下にしてください,", 
+		"ROOT名  [Modifier],[Usage],[ASCII]のいずれか", 
+		"  書式  [Id]   GamePADのIDコード", 
+		"        [Value]KEYONになる閾値
+		"        [Y]    Matrixの番号0-16 17=PAUSE,18=RESET [0x00は割り当て無し]", 
+		"        [Mask] 当該Matrixのマスク値、当該BITを1にするとON", 
+		"        [Name] キー名（未使用)", 
+		"(YとMASKは一つのキーに2つまで持てる)" 
+	], 
+	"Keymap" : { 
+		"Usage" : [ 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 1, 0], 
+				"Id"   : "Button0", 
+				"Name" : "Key SPACE" 
+			} , 
+			{ 
+				"Y"    : [ 7, 0], 
+				"Mask" : [ 4, 0], 
+				"Id"   : "Button1", 
+				"Name" : "Key GRAPH" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 4, 0], 
+				"Id"   : "Button2", 
+				"Name" : "Key 2 and @" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 8, 0], 
+				"Id"   : "Button3", 
+				"Name" : "Key 3 and #" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 16, 0], 
+				"Id"   : "Button4", 
+				"Name" : "Key 4 and $" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 32, 0], 
+				"Id"   : "Button5", 
+				"Name" : "Key 5 and %" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 64, 0], 
+				"Id"   : "Button6", 
+				"Name" : "Key 6 and ^" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 128, 0], 
+				"Id"   : "Button7", 
+				"Name" : "Key 7 and [and]" 
+			} , 
+			{ 
+				"Y"    : [ 2, 0], 
+				"Mask" : [ 1, 0], 
+				"Id"   : "Button8", 
+				"Name" : "Key 8 and *" 
+			} , 
+			{ 
+				"Y"    : [ 2, 0], 
+				"Mask" : [ 2, 0], 
+				"Id"   : "Button9", 
+				"Name" : "Key 9 and (" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 1, 0], 
+				"Id"   : "Button10", 
+				"Name" : "Key 0 and )" 
+			} , 
+						{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 2, 0], 
+				"Id"   : "Button11", 
+				"Name" : "Key 1 and !" 
+			} , 
+			{ 
+				"Y"    : [ 1, 0], 
+				"Mask" : [ 4, 0], 
+				"Id"   : "Button12", 
+				"Name" : "Key 2 and @" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 128, 0], 
+				"Id"   : "HatSwitch_R", 
+				"Name" : "Key Right Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 16, 0], 
+				"Id"   : "HatSwitch_L", 
+				"Name" : "Key Left Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 64, 0], 
+				"Id"   : "HatSwitch_D", 
+				"Name" : "Key Down Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 32, 0], 
+				"Id"   : "HatSwitch_U", 
+				"Name" : "Key Up Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 11, 0], 
+				"Mask" : [ 2, 0], 
+				"Id"   : "Axis0_min", 
+				"Value": "0x10", 
+				"Name" : "Keypad 6 and Right Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 10, 0], 
+				"Mask" : [ 128, 0], 
+				"Id"   : "Axis0_max", 
+				"Value": "0xF0", 
+				"Name" : "Keypad 4 and Left Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 10, 0], 
+				"Mask" : [ 32, 0], 
+				"Id"   : "Axis1_min", 
+				"Value": "0x10", 
+				"Name" : "Keypad 2 and Down Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 11, 0], 
+				"Mask" : [ 8, 0], 
+				"Id"   : "Axis1_max", 
+				"Value": "0xF0", 
+				"Name" : "Keypad 8 and Up Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 128, 0], 
+				"Id"   : "Axis2_min", 
+				"Value": "0x10", 
+				"Name" : "Key Right Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 16, 0], 
+				"Id"   : "Axis2_max", 
+				"Value": "0xF0", 
+				"Name" : "Key Left Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 32, 0], 
+				"Id"   : "Axis3_min", 
+				"Value": "0x10", 
+				"Name" : "Key Up Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 9, 0], 
+				"Mask" : [ 64, 0], 
+				"Id"   : "Axis3_max", 
+				"Value": "0xF0", 
+				"Name" : "Key Down Arrow" 
+			} , 
+			{ 
+				"Y"    : [ 6, 0], 
+				"Mask" : [ 128, 0], 
+				"Id"   : "Axis4_min", 
+				"Value": "0x10", 
+				"Name" : "Key Z" 
+			} , 
+			{ 
+				"Y"    : [ 6, 0], 
+				"Mask" : [ 32, 0], 
+				"Id"   : "Axis4_max", 
+				"Value": "0xF0", 
+				"Name" : "Key X" 
+			} , 
+			{ 
+				"Y"    : [ 4, 0], 
+				"Mask" : [ 1, 0], 
+				"Id"   : "Axis5_min", 
+				"Value": "0x10", 
+				"Name" : "Key C" 
+			} , 
+			{ 
+				"Y"    : [ 6, 0], 
+				"Mask" : [ 8, 0], 
+				"Id"   : "Axis5_max", 
+				"Value": "0xF0", 
+				"Name" : "Key V" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis6_min", 
+				"Value": "0x10", 
+				"Name" : "None" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis6_max", 
+				"Value": "0xF0", 
+				"Name" : "None" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis7_min", 
+				"Value": "0x10", 
+				"Name" : "None" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis7_max", 
+				"Value": "0xF0", 
+				"Name" : "None" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis8_min", 
+				"Value": "0x10", 
+				"Name" : "None" 
+			} , 
+			{ 
+				"Y"    : [ 0, 0], 
+				"Mask" : [ 0, 0], 
+				"Id"   : "Axis8_max", 
+				"Value": "0xF0", 
+				"Name" : "None" 
+			} ,
+		] 
+	} 
+}
+
