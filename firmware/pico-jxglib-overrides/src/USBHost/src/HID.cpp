@@ -5,15 +5,31 @@
 
 #if CFG_TUH_HID > 0
 
+// Set to 1 with -DJXGLIB_USBHOST_DIAGNOSTICS=1. Shared with USBHost.cpp.
+#ifndef JXGLIB_USBHOST_DIAGNOSTICS
+#define JXGLIB_USBHOST_DIAGNOSTICS 0
+#endif
+
 //------------------------------------------------------------------------------
 // Callback functions
 //------------------------------------------------------------------------------
 extern "C" void tuh_hid_mount_cb(uint8_t devAddr, uint8_t iInstance, const uint8_t* descReport, uint16_t descLen)
 {
 	using namespace jxglib::USBHost;
+	#if JXGLIB_USBHOST_DIAGNOSTICS
 	::printf("tuh_hid_mount_cb(devAddr=%d, iInstance=%d)\n", devAddr, iInstance);
+	HID::DumpSlotState("before mount");
+	#endif
 	HID::MountHID(devAddr, iInstance, descReport, descLen);
-	if (!::tuh_hid_receive_report(devAddr, iInstance)) {
+	#if JXGLIB_USBHOST_DIAGNOSTICS
+	HID::DumpSlotState("after mount");
+	#endif
+	const bool receiveStarted = ::tuh_hid_receive_report(devAddr, iInstance);
+	#if JXGLIB_USBHOST_DIAGNOSTICS
+	::printf("[USBH:HID] receive start mount addr=%u inst=%u result=%u\n",
+		devAddr, iInstance, receiveStarted);
+	#endif
+	if (!receiveStarted) {
 		::printf("tuh_hid_receive_report() failed\n");
 	}
 }
@@ -21,8 +37,15 @@ extern "C" void tuh_hid_mount_cb(uint8_t devAddr, uint8_t iInstance, const uint8
 extern "C" void tuh_hid_umount_cb(uint8_t devAddr, uint8_t iInstance)
 {
 	using namespace jxglib::USBHost;
+	#if JXGLIB_USBHOST_DIAGNOSTICS
 	::printf("tuh_hid_umount_cb(%d, %d)\n", devAddr, iInstance);
+	::printf("[USBH:HID] unmount addr=%u inst=%u\n", devAddr, iInstance);
+	HID::DumpSlotState("before unmount");
+	#endif
 	HID::UmountHID(iInstance);
+	#if JXGLIB_USBHOST_DIAGNOSTICS
+	HID::DumpSlotState("after unmount");
+	#endif
 }
 
 extern "C" void tuh_hid_report_received_cb(uint8_t devAddr, uint8_t iInstance, const uint8_t* report, uint16_t len)
@@ -32,7 +55,11 @@ extern "C" void tuh_hid_report_received_cb(uint8_t devAddr, uint8_t iInstance, c
 	HID* pHID = HID::LookupHID(iInstance);
 	HID::Report reportPack { report, len };
 	if (pHID) pHID->OnReport(reportPack);
-	::tuh_hid_receive_report(devAddr, iInstance);
+	const bool receiveStarted = ::tuh_hid_receive_report(devAddr, iInstance);
+	#if JXGLIB_USBHOST_DIAGNOSTICS
+	::printf("[USBH:HID] report addr=%u inst=%u len=%u hid=%p receive=%u\n",
+		devAddr, iInstance, len, static_cast<void*>(pHID), receiveStarted);
+	#endif
 }
 
 namespace jxglib::USBHost {
@@ -41,6 +68,25 @@ namespace jxglib::USBHost {
 // USBHost::HID
 //------------------------------------------------------------------------------
 HID* HID::hidTbl_[CFG_TUH_HID] = { nullptr };
+
+void HID::DumpSlotState(const char* reason)
+{
+	#if JXGLIB_USBHOST_DIAGNOSTICS
+	uint8_t used = 0;
+	::printf("[USBH:HID] slots %s: used=", reason ? reason : "state");
+	for (uint8_t i = 0; i < CFG_TUH_HID; ++i) {
+		const HID* pHID = hidTbl_[i];
+		if (pHID) ++used;
+		::printf("%s%u:%s", i == 0 ? "" : ",", i, pHID ? "used" : "free");
+		if (pHID) {
+			::printf("(addr=%u,inst=%u)", pHID->GetDeviceAddress(), pHID->GetInstance());
+		}
+	}
+	::printf(" total=%u/%u\n", used, static_cast<unsigned>(CFG_TUH_HID));
+	#else
+	(void) reason;
+	#endif
+}
 
 HID::HID(uint8_t devAddr, uint8_t iInstance, HID::Application* pApplication) :
 	devAddr_{devAddr}, iInstance_{iInstance}, pApplication_{pApplication},
@@ -90,7 +136,9 @@ HID::Application* HID::ParseReportDescriptor(const uint8_t* descReport, uint16_t
 		}
 		if (itemType == 0xfc) {
 			// Long Items
-			descOffset += itemData & 0xff;
+			const uint16_t longItemLength = static_cast<uint16_t>(itemData & 0xff);
+			if (descOffset + longItemLength > descLen) return nullptr;
+			descOffset += longItemLength;
 			itemTypePrev = itemType;
 			continue;
 		}
@@ -138,6 +186,7 @@ HID::Application* HID::ParseReportDescriptor(const uint8_t* descReport, uint16_t
 			break;
 		}
 		case ItemType::EndCollection: {
+			if (!pCollectionCur) return nullptr;
 			pCollectionCur = pCollectionCur->GetCollectionParent();
 			break;
 		}
@@ -191,8 +240,9 @@ HID::Application* HID::ParseReportDescriptor(const uint8_t* descReport, uint16_t
 		}
 		case ItemType::Pop: {
 			for (GlobalItemList* pGlobalItemList = pGlobalItemStack.get(); pGlobalItemList;
-															pGlobalItemList = pGlobalItemList->GetListNext()) {
-				if (pGlobalItemCur == &pGlobalItemList->GetListNext()->globalItem) {
+											pGlobalItemList = pGlobalItemList->GetListNext()) {
+				if (pGlobalItemList->GetListNext() &&
+					pGlobalItemCur == &pGlobalItemList->GetListNext()->globalItem) {
 					pGlobalItemList->RemoveListNext();
 					pGlobalItemCur = &pGlobalItemList->globalItem;
 					break;
@@ -575,7 +625,29 @@ void HID::Application::PrintAll(Printable& printable, int indentLevel) const
 
 void HID::MountHID(uint8_t devAddr, uint8_t iInstance, const uint8_t* descReport, uint16_t descLen)
 {
-	if (iInstance >= CFG_TUH_HID || (descLen > 0 && !descReport)) return;
+	if (iInstance >= CFG_TUH_HID) {
+		#if JXGLIB_USBHOST_DIAGNOSTICS
+		::printf("[USBH:HID] mount rejected: addr=%u inst=%u is outside CFG_TUH_HID=%u\n",
+			devAddr, iInstance, static_cast<unsigned>(CFG_TUH_HID));
+		DumpSlotState("mount rejected");
+		#endif
+		return;
+	}
+	if (descLen > 0 && !descReport) {
+		#if JXGLIB_USBHOST_DIAGNOSTICS
+		::printf("[USBH:HID] mount rejected: addr=%u inst=%u descriptor is null len=%u\n",
+			devAddr, iInstance, descLen);
+		#endif
+		return;
+	}
+	if (hidTbl_[iInstance]) {
+		#if JXGLIB_USBHOST_DIAGNOSTICS
+		::printf("[USBH:HID] stale slot overwrite: slot=%u old(addr=%u,inst=%u) new(addr=%u,inst=%u)\n",
+			iInstance, hidTbl_[iInstance]->GetDeviceAddress(), hidTbl_[iInstance]->GetInstance(),
+			devAddr, iInstance);
+		DumpSlotState("stale slot before replacement");
+		#endif
+	}
 	std::unique_ptr<HID::Application> pApplicationTop(HID::ParseReportDescriptor(descReport, descLen));
 	if (pApplicationTop) {
 		HID::Application* pApplication = pApplicationTop.get();
@@ -596,9 +668,22 @@ void HID::MountHID(uint8_t devAddr, uint8_t iInstance, const uint8_t* descReport
 
 void HID::UmountHID(uint8_t iInstance)
 {
-	if (iInstance >= CFG_TUH_HID) return;
+	if (iInstance >= CFG_TUH_HID) {
+		#if JXGLIB_USBHOST_DIAGNOSTICS
+		::printf("[USBH:HID] unmount rejected: inst=%u is outside CFG_TUH_HID=%u\n",
+			iInstance, static_cast<unsigned>(CFG_TUH_HID));
+		DumpSlotState("unmount rejected");
+		#endif
+		return;
+	}
 	HID* pHID = hidTbl_[iInstance];
-	if (!pHID) return;
+	if (!pHID) {
+		#if JXGLIB_USBHOST_DIAGNOSTICS
+		::printf("[USBH:HID] unmount found an already-free slot: inst=%u\n", iInstance);
+		DumpSlotState("unmount free slot");
+		#endif
+		return;
+	}
 	HIDDriver* pHIDDriver = pHID->GetHIDDriver();
 	if (pHIDDriver) {
 		pHIDDriver->OnUmount();

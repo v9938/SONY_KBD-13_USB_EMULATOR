@@ -83,6 +83,7 @@ void GamePad::ClearUsageAccessor()
 	switchProInitStep_ = 0;
 	switchProInitStarted_ = false;
 	switchProControlPending_ = false;
+	switchProNextInitMs_ = 0;
 	::memset(switchProButton_, 0x00, sizeof(switchProButton_));
 	::memset(switchProAxis_, 0x00, sizeof(switchProAxis_));
 	switchProHatSwitch_ = 0;

@@ -2,6 +2,7 @@
 // SwitchPro.cpp - Nintendo Switch Pro Controller USB HID support.
 //==============================================================================
 #include "jxglib/USBHost/HID.h"
+#include "pico/time.h"
 
 #if CFG_TUH_HID > 0
 namespace jxglib::USBHost {
@@ -17,6 +18,8 @@ constexpr uint8_t kReportUsbCommand = 0x80;
 constexpr uint8_t kUsbEnable = 0x04;
 constexpr uint8_t kUsbHandshake = 0x02;
 constexpr uint8_t kHidReportTypeOutput = 0x02;
+constexpr uint32_t kInitCommandIntervalMs = 10;
+constexpr uint32_t kInitRetryIntervalMs = 100;
 
 GamePad* s_switchProGamePad = nullptr;
 
@@ -43,14 +46,15 @@ uint32_t switch_hat(bool up, bool down, bool left, bool right)
 
 bool send_switch_pro_report(GamePad& gamePad, const uint8_t* data, uint16_t len, const char* label)
 {
+	(void) label;
 	if (gamePad.switchProControlPending_ || len < 2 || data[0] != kReportUsbCommand) return false;
 	if (!::tuh_hid_set_report(gamePad.switchProDeviceAddress_, gamePad.switchProInstance_,
 		kReportUsbCommand, kHidReportTypeOutput, const_cast<uint8_t*>(data), len)) {
-		::printf("[SWPRO] %s submit failed\n", label);
+		// ::printf("[SWPRO] %s submit failed\n", label);
 		return false;
 	}
 	gamePad.switchProControlPending_ = true;
-	::printf("[SWPRO] %s sent (report=80 data=%u bytes)\n", label, static_cast<unsigned>(len));
+	// ::printf("[SWPRO] %s sent (report=80 data=%u bytes)\n", label, static_cast<unsigned>(len));
 	return true;
 }
 
@@ -71,20 +75,17 @@ void switch_pro_initialize(GamePad& gamePad)
 
 	switch (gamePad.switchProInitStep_) {
 	case 0:
-		if (send_switch_pro_report(gamePad, kEnable, sizeof(kEnable), "USB enable")) ++gamePad.switchProInitStep_;
+		send_switch_pro_report(gamePad, kEnable, sizeof(kEnable), "USB enable");
 		break;
 	case 1:
-		if (send_switch_pro_report(gamePad, kHandshake, sizeof(kHandshake), "USB handshake")) ++gamePad.switchProInitStep_;
+		send_switch_pro_report(gamePad, kHandshake, sizeof(kHandshake), "USB handshake");
 		break;
 	case 2:
-		if (send_switch_pro_report(gamePad, kSetFullMode, sizeof(kSetFullMode), "full input mode")) {
-			++gamePad.switchProInitStep_;
-		}
+		send_switch_pro_report(gamePad, kSetFullMode, sizeof(kSetFullMode), "full input mode");
 		break;
 	case 3:
 		if (send_switch_pro_report(gamePad, kSetPlayerLed, sizeof(kSetPlayerLed), "player LED 1")) {
-			++gamePad.switchProInitStep_;
-			::printf("[SWPRO] initialization complete; waiting for report 0x30\n");
+			// ::printf("[SWPRO] initialization complete; waiting for report 0x30\n");
 		}
 		break;
 	default:
@@ -109,23 +110,25 @@ void GamePad::OnSwitchProMount(uint8_t devAddr, uint8_t iInstance, uint16_t vid,
 	switchProInitStep_ = 0;
 	switchProInitStarted_ = false;
 	switchProControlPending_ = false;
+	switchProNextInitMs_ = 0;
 	::memset(switchProButton_, 0x00, sizeof(switchProButton_));
 	::memset(switchProAxis_, 0x00, sizeof(switchProAxis_));
 	switchProHatSwitch_ = 0;
-	::printf("[SWPRO] mounted addr=%u inst=%u vid=%04x pid=%04x\n", devAddr, iInstance, vid, pid);
-	::printf("[SWPRO] waiting for the controller USB-ready reply\n");
+	// ::printf("[SWPRO] mounted addr=%u inst=%u vid=%04x pid=%04x\n", devAddr, iInstance, vid, pid);
+	// ::printf("[SWPRO] waiting for the controller USB-ready reply\n");
 }
 
 void GamePad::OnSwitchProUmount(uint8_t devAddr)
 {
 	if (!s_switchProGamePad || s_switchProGamePad->switchProDeviceAddress_ != devAddr) return;
-	::printf("[SWPRO] unmounted addr=%u\n", devAddr);
+	// ::printf("[SWPRO] unmounted addr=%u\n", devAddr);
 	s_switchProGamePad->switchProMounted_ = false;
 	s_switchProGamePad->switchProReportActive_ = false;
 	s_switchProGamePad->switchProReady_ = false;
 	s_switchProGamePad->switchProReportChanged_ = false;
 	s_switchProGamePad->switchProInitStarted_ = false;
 	s_switchProGamePad->switchProControlPending_ = false;
+	s_switchProGamePad->switchProNextInitMs_ = 0;
 	s_switchProGamePad = nullptr;
 }
 
@@ -135,16 +138,16 @@ void GamePad::OnSwitchProReport(uint8_t devAddr, const uint8_t* report, uint16_t
 	GamePad& gamePad = *s_switchProGamePad;
 	if (!gamePad.switchProInitStarted_) {
 		gamePad.switchProInitStarted_ = true;
-		::printf("[SWPRO] controller reply received; starting initialization\n");
-		switch_pro_initialize(gamePad);
+		gamePad.switchProNextInitMs_ = to_ms_since_boot(get_absolute_time());
+		// ::printf("[SWPRO] controller reply received; starting initialization\n");
 	}
 
 	if (report[0] == kReportUsbReply) {
-		::printf("[SWPRO] USB reply raw:");
-		for (uint16_t i = 0; i < len && i < 16; ++i) ::printf(" %02x", report[i]);
-		::printf("\n");
+		// ::printf("[SWPRO] USB reply raw:");
+		// for (uint16_t i = 0; i < len && i < 16; ++i) ::printf(" %02x", report[i]);
+		// ::printf("\n");
 		if (len <= 10) {
-			::printf("[SWPRO] short USB reply len=%u\n", static_cast<unsigned>(len));
+			// ::printf("[SWPRO] short USB reply len=%u\n", static_cast<unsigned>(len));
 			return;
 		}
 		report += 10;
@@ -152,17 +155,17 @@ void GamePad::OnSwitchProReport(uint8_t devAddr, const uint8_t* report, uint16_t
 	}
 
 	if (report[0] == kReportInputAck) {
-		::printf("[SWPRO] command ACK len=%u cmd=%02x\n", static_cast<unsigned>(len), len > 14 ? report[14] : 0xff);
+		// ::printf("[SWPRO] command ACK len=%u cmd=%02x\n", static_cast<unsigned>(len), len > 14 ? report[14] : 0xff);
 		return;
 	}
 	if (report[0] != kReportInputFull) {
-		::printf("[SWPRO] ignored report id=%02x len=%u data:", report[0], static_cast<unsigned>(len));
-		for (uint16_t i = 0; i < len && i < 16; ++i) ::printf(" %02x", report[i]);
-		::printf("\n");
+		// ::printf("[SWPRO] ignored report id=%02x len=%u data:", report[0], static_cast<unsigned>(len));
+		// for (uint16_t i = 0; i < len && i < 16; ++i) ::printf(" %02x", report[i]);
+		// ::printf("\n");
 		return;
 	}
 	if (len < 12) {
-		::printf("[SWPRO] short full report len=%u\n", static_cast<unsigned>(len));
+		// ::printf("[SWPRO] short full report len=%u\n", static_cast<unsigned>(len));
 		return;
 	}
 
@@ -198,8 +201,8 @@ void GamePad::OnSwitchProReport(uint8_t devAddr, const uint8_t* report, uint16_t
 	gamePad.switchProReportActive_ = true;
 	gamePad.switchProReady_ = true;
 	gamePad.switchProReportChanged_ = true;
-	::printf("[SWPRO] input lx=%u ly=%u rx=%u ry=%u hat=%u\n", leftX, leftY, rightX, rightY,
-		static_cast<unsigned>(gamePad.switchProHatSwitch_));
+	// ::printf("[SWPRO] input lx=%u ly=%u rx=%u ry=%u hat=%u\n", leftX, leftY, rightX, rightY,
+	// 	static_cast<unsigned>(gamePad.switchProHatSwitch_));
 }
 
 void GamePad::OnSwitchProSetReportComplete(uint8_t devAddr, uint8_t iInstance, uint8_t reportId, uint16_t len)
@@ -209,20 +212,38 @@ void GamePad::OnSwitchProSetReportComplete(uint8_t devAddr, uint8_t iInstance, u
 		!s_switchProGamePad->switchProControlPending_) return;
 	s_switchProGamePad->switchProControlPending_ = false;
 	if (len == 0) {
-		::printf("[SWPRO] control SET_REPORT failed at init step=%u\n",
-			static_cast<unsigned>(s_switchProGamePad->switchProInitStep_));
+		s_switchProGamePad->switchProNextInitMs_ =
+			to_ms_since_boot(get_absolute_time()) + kInitRetryIntervalMs;
+		// ::printf("[SWPRO] control SET_REPORT failed at init step=%u\n",
+		// 	static_cast<unsigned>(s_switchProGamePad->switchProInitStep_));
 		return;
 	}
-	::printf("[SWPRO] control SET_REPORT complete step=%u len=%u\n",
-		static_cast<unsigned>(s_switchProGamePad->switchProInitStep_), static_cast<unsigned>(len));
-	switch_pro_initialize(*s_switchProGamePad);
+	++s_switchProGamePad->switchProInitStep_;
+	s_switchProGamePad->switchProNextInitMs_ =
+		to_ms_since_boot(get_absolute_time()) + kInitCommandIntervalMs;
+	// ::printf("[SWPRO] control SET_REPORT complete step=%u len=%u\n",
+	// 	static_cast<unsigned>(s_switchProGamePad->switchProInitStep_), static_cast<unsigned>(len));
+}
+
+void GamePad::SwitchProTask()
+{
+	if (!switchProMounted_ || !switchProInitStarted_ || switchProControlPending_ || switchProInitStep_ >= 4) return;
+	const uint32_t nowMs = to_ms_since_boot(get_absolute_time());
+	if (static_cast<int32_t>(nowMs - switchProNextInitMs_) < 0) return;
+	// switch_pro_initialize() owns command selection; a failed submit is retried later.
+	switch_pro_initialize(*this);
+	if (!switchProControlPending_) switchProNextInitMs_ = nowMs + kInitRetryIntervalMs;
 }
 
 } // namespace jxglib::USBHost
 
+extern "C" void host_hid_keyboard_led_set_report_complete(uint8_t devAddr, uint8_t instance,
+	uint8_t reportId, uint8_t reportType, uint16_t len);
+
 extern "C" void tuh_hid_set_report_complete_cb(uint8_t devAddr, uint8_t iInstance,
 	uint8_t reportId, uint8_t reportType, uint16_t len)
 {
+	host_hid_keyboard_led_set_report_complete(devAddr, iInstance, reportId, reportType, len);
 	if (reportType == 0x02) {
 		jxglib::USBHost::GamePad::OnSwitchProSetReportComplete(devAddr, iInstance, reportId, len);
 	}

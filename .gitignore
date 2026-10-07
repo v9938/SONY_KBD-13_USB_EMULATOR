@@ -1,1 +1,14 @@
+firmware/build/
+firmware/build-*/
+.vscode/
+.kilo/
 *.BAK
+*.BAK[0-9]*
+*.elf
+*.elf.map
+*.bin
+*.hex
+*.uf2
+*.log
+**/bin/
+**/obj/

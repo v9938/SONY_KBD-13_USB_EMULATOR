@@ -1,19 +1,13 @@
-﻿set(target_name host_hid_msc)
+﻿set(target_name KBD-13_EMU)
 add_executable(${target_name})
 
-set(PICO_JXGLIB_OVERRIDE_DIR
-  "${CMAKE_CURRENT_LIST_DIR}/../pico-jxglib-overrides"
-  CACHE PATH "pico-jxglib source overrides")
-
 target_sources(${target_name} PRIVATE
-  host_hid_msc.cpp
+  KBD-13_EMU.cpp
   ws2812.pio
   hbf500_dat_bus.pio
   # can use 'tinyusb_pico_pio_usb' library later when pico-sdk is updated
 #  ${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/hcd_pio_usb.c
 )
-
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../pico-jxglib pico-jxglib)
 
 # UART output only
 pico_enable_stdio_uart(${target_name} 1)
@@ -35,7 +29,7 @@ target_compile_definitions(${target_name} PRIVATE
 
 # Keep TinyUSB silent in normal firmware. Raise this only for transport
 # diagnostics, which intentionally change USB host timing.
-set(CFG_TUSB_DEBUG 1 CACHE STRING
+set(CFG_TUSB_DEBUG 0 CACHE STRING
     "TinyUSB diagnostic level (0 for release firmware)" FORCE)
 target_compile_options(${target_name} PRIVATE
   -UCFG_TUSB_DEBUG

@@ -1,16 +1,16 @@
 { 
 	"#comment" : [ 
 		"ファイルサイズは32KByte以下にしてください,", 
-		"ROOT名  [Modifier],[Usage],[ASCII]のいずれか", 
+		"ROOT名  [GamePad]", 
 		"  書式  [Id]   GamePADのIDコード", 
-		"        [Value]KEYONになる閾値
+		"        [Value]KEYONになる閾値(-1～1)", 
 		"        [Y]    Matrixの番号0-16 17=PAUSE,18=RESET [0x00は割り当て無し]", 
 		"        [Mask] 当該Matrixのマスク値、当該BITを1にするとON", 
 		"        [Name] キー名（未使用)", 
 		"(YとMASKは一つのキーに2つまで持てる)" 
 	], 
 	"Keymap" : { 
-		"Usage" : [ 
+		"GamePad" : [ 
 			{ 
 				"Y"    : [ 9, 0], 
 				"Mask" : [ 1, 0], 
@@ -117,126 +117,126 @@
 				"Y"    : [ 11, 0], 
 				"Mask" : [ 2, 0], 
 				"Id"   : "Axis0_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Keypad 6 and Right Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 10, 0], 
 				"Mask" : [ 128, 0], 
 				"Id"   : "Axis0_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Keypad 4 and Left Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 10, 0], 
 				"Mask" : [ 32, 0], 
 				"Id"   : "Axis1_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Keypad 2 and Down Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 11, 0], 
 				"Mask" : [ 8, 0], 
 				"Id"   : "Axis1_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Keypad 8 and Up Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 9, 0], 
 				"Mask" : [ 128, 0], 
 				"Id"   : "Axis2_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Key Right Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 9, 0], 
 				"Mask" : [ 16, 0], 
 				"Id"   : "Axis2_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Key Left Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 9, 0], 
 				"Mask" : [ 32, 0], 
 				"Id"   : "Axis3_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Key Up Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 9, 0], 
 				"Mask" : [ 64, 0], 
 				"Id"   : "Axis3_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Key Down Arrow" 
 			} , 
 			{ 
 				"Y"    : [ 6, 0], 
 				"Mask" : [ 128, 0], 
 				"Id"   : "Axis4_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Key Z" 
 			} , 
 			{ 
 				"Y"    : [ 6, 0], 
 				"Mask" : [ 32, 0], 
 				"Id"   : "Axis4_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Key X" 
 			} , 
 			{ 
 				"Y"    : [ 4, 0], 
 				"Mask" : [ 1, 0], 
 				"Id"   : "Axis5_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "Key C" 
 			} , 
 			{ 
 				"Y"    : [ 6, 0], 
 				"Mask" : [ 8, 0], 
 				"Id"   : "Axis5_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "Key V" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis6_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "None" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis6_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "None" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis7_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "None" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis7_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "None" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis8_min", 
-				"Value": "0x10", 
+				"Value": -0.6, 
 				"Name" : "None" 
 			} , 
 			{ 
 				"Y"    : [ 0, 0], 
 				"Mask" : [ 0, 0], 
 				"Id"   : "Axis8_max", 
-				"Value": "0xF0", 
+				"Value": 0.6, 
 				"Name" : "None" 
 			} ,
 		] 

@@ -315,11 +315,16 @@ public:
 public:
 	uint16_t GetVID() const { uint16_t vid, pid; ::tuh_vid_pid_get(devAddr_, &vid, &pid); return vid; }
 	uint16_t GetPID() const { uint16_t vid, pid; ::tuh_vid_pid_get(devAddr_, &vid, &pid); return pid; }
+	uint8_t GetDeviceAddress() const { return devAddr_; }
+	uint8_t GetInstance() const { return iInstance_; }
 private:
 	static HID* hidTbl_[CFG_TUH_HID];
 public:
 	static void MountHID(uint8_t devAddr, uint8_t iInstance, const uint8_t* descReport, uint16_t descLen);
 	static void UmountHID(uint8_t iInstance);
+	// Diagnostic helper. Emits the jxglib HID table state only when
+	// JXGLIB_USBHOST_DIAGNOSTICS is enabled in the implementation.
+	static void DumpSlotState(const char* reason);
 	static HID* LookupHID(uint8_t iInstance) {
 		return (iInstance < CFG_TUH_HID)? hidTbl_[iInstance] : nullptr;
 	}
@@ -458,6 +463,32 @@ public:
 //------------------------------------------------------------------------------
 class GamePad : public HIDDriver {
 private:
+	static GamePad* pXInputGamePad_;
+	bool xinputMounted_;
+	bool xinputReportChanged_;
+	uint16_t xinputVID_;
+	uint16_t xinputPID_;
+	bool xinputReportActive_;
+	bool xinputButton_[13];
+	float xinputAxis_[9];
+	uint32_t xinputHatSwitch_;
+public: // SwitchPro.cpp protocol backend state
+	bool switchProMounted_;
+	bool switchProReportChanged_;
+	uint16_t switchProVID_;
+	uint16_t switchProPID_;
+	uint8_t switchProDeviceAddress_;
+	uint8_t switchProInstance_;
+	bool switchProReportActive_;
+	bool switchProReady_;
+	uint8_t switchProInitStep_;
+	bool switchProInitStarted_;
+	bool switchProControlPending_;
+	uint32_t switchProNextInitMs_;
+	bool switchProButton_[13];
+	float switchProAxis_[9];
+	uint32_t switchProHatSwitch_;
+private:
 	const HID::UsageAccessor* pUsage_Button0;
 	const HID::UsageAccessor* pUsage_Button1;
 	const HID::UsageAccessor* pUsage_Button2;
@@ -501,29 +532,48 @@ private:
 public:
 	GamePad();
 public:
-	bool Get_Button0() const			{ return GetBool(*pUsage_Button0); }
-	bool Get_Button1() const			{ return GetBool(*pUsage_Button1); }
-	bool Get_Button2() const			{ return GetBool(*pUsage_Button2); }
-	bool Get_Button3() const			{ return GetBool(*pUsage_Button3); }
-	bool Get_Button4() const			{ return GetBool(*pUsage_Button4); }
-	bool Get_Button5() const			{ return GetBool(*pUsage_Button5); }
-	bool Get_Button6() const			{ return GetBool(*pUsage_Button6); }
-	bool Get_Button7() const			{ return GetBool(*pUsage_Button7); }
-	bool Get_Button8() const			{ return GetBool(*pUsage_Button8); }
-	bool Get_Button9() const			{ return GetBool(*pUsage_Button9); }
-	bool Get_Button10() const			{ return GetBool(*pUsage_Button10); }
-	bool Get_Button11() const			{ return GetBool(*pUsage_Button11); }
-	bool Get_Button12() const			{ return GetBool(*pUsage_Button12); }
-	float Get_Axis0() const				{ return GetCookedAxis(*pUsage_Axis0); }
-	float Get_Axis1() const				{ return GetCookedAxis(*pUsage_Axis1); }
-	float Get_Axis2() const				{ return GetCookedAxis(*pUsage_Axis2); }
-	float Get_Axis3() const				{ return GetCookedAxis(*pUsage_Axis3); }
-	float Get_Axis4() const				{ return GetCookedAxis(*pUsage_Axis4); }
-	float Get_Axis5() const				{ return GetCookedAxis(*pUsage_Axis5); }
-	float Get_Axis6() const				{ return GetCookedAxis(*pUsage_Axis6); }
-	float Get_Axis7() const				{ return GetCookedAxis(*pUsage_Axis7); }
-	float Get_Axis8() const				{ return GetCookedAxis(*pUsage_Axis8); }
+	bool IsMounted() const { return HIDDriver::IsMounted() || xinputMounted_ || switchProMounted_; }
+	bool HasReportChanged() {
+		if (xinputMounted_) { bool changed = xinputReportChanged_; xinputReportChanged_ = false; return changed; }
+		if (switchProMounted_) { bool changed = switchProReportChanged_; switchProReportChanged_ = false; return changed; }
+		return HIDDriver::HasReportChanged();
+	}
+	uint16_t GetVID() const { return xinputMounted_ ? xinputVID_ : switchProMounted_ ? switchProVID_ : GetHID().GetVID(); }
+	uint16_t GetPID() const { return xinputMounted_ ? xinputPID_ : switchProMounted_ ? switchProPID_ : GetHID().GetPID(); }
+	static void OnXInputMount(uint8_t devAddr, uint16_t vid, uint16_t pid);
+	static void OnXInputUmount(uint8_t devAddr);
+	static void OnXInputReport(uint8_t devAddr, const uint8_t* packet, uint16_t len);
+	void OnSwitchProMount(uint8_t devAddr, uint8_t iInstance, uint16_t vid, uint16_t pid);
+	void OnSwitchProUmount(uint8_t devAddr);
+	void OnSwitchProReport(uint8_t devAddr, const uint8_t* packet, uint16_t len);
+	static void OnSwitchProSetReportComplete(uint8_t devAddr, uint8_t iInstance, uint8_t reportId, uint16_t len);
+	void SwitchProTask();
+	bool IsSwitchProReady() const { return !switchProMounted_ || switchProReady_; }
+	bool Get_Button0() const			{ return xinputReportActive_ ? xinputButton_[0] : switchProReportActive_ ? switchProButton_[0] : GetBool(*pUsage_Button0); }
+	bool Get_Button1() const			{ return xinputReportActive_ ? xinputButton_[1] : switchProReportActive_ ? switchProButton_[1] : GetBool(*pUsage_Button1); }
+	bool Get_Button2() const			{ return xinputReportActive_ ? xinputButton_[2] : switchProReportActive_ ? switchProButton_[2] : GetBool(*pUsage_Button2); }
+	bool Get_Button3() const			{ return xinputReportActive_ ? xinputButton_[3] : switchProReportActive_ ? switchProButton_[3] : GetBool(*pUsage_Button3); }
+	bool Get_Button4() const			{ return xinputReportActive_ ? xinputButton_[4] : switchProReportActive_ ? switchProButton_[4] : GetBool(*pUsage_Button4); }
+	bool Get_Button5() const			{ return xinputReportActive_ ? xinputButton_[5] : switchProReportActive_ ? switchProButton_[5] : GetBool(*pUsage_Button5); }
+	bool Get_Button6() const			{ return xinputReportActive_ ? xinputButton_[6] : switchProReportActive_ ? switchProButton_[6] : GetBool(*pUsage_Button6); }
+	bool Get_Button7() const			{ return xinputReportActive_ ? xinputButton_[7] : switchProReportActive_ ? switchProButton_[7] : GetBool(*pUsage_Button7); }
+	bool Get_Button8() const			{ return xinputReportActive_ ? xinputButton_[8] : switchProReportActive_ ? switchProButton_[8] : GetBool(*pUsage_Button8); }
+	bool Get_Button9() const			{ return xinputReportActive_ ? xinputButton_[9] : switchProReportActive_ ? switchProButton_[9] : GetBool(*pUsage_Button9); }
+	bool Get_Button10() const			{ return xinputReportActive_ ? xinputButton_[10] : switchProReportActive_ ? switchProButton_[10] : GetBool(*pUsage_Button10); }
+	bool Get_Button11() const			{ return xinputReportActive_ ? xinputButton_[11] : switchProReportActive_ ? switchProButton_[11] : GetBool(*pUsage_Button11); }
+	bool Get_Button12() const			{ return xinputReportActive_ ? xinputButton_[12] : switchProReportActive_ ? switchProButton_[12] : GetBool(*pUsage_Button12); }
+	float Get_Axis0() const				{ return xinputReportActive_ ? xinputAxis_[0] : switchProReportActive_ ? switchProAxis_[0] : GetCookedAxis(*pUsage_Axis0); }
+	float Get_Axis1() const				{ return xinputReportActive_ ? xinputAxis_[1] : switchProReportActive_ ? switchProAxis_[1] : GetCookedAxis(*pUsage_Axis1); }
+	float Get_Axis2() const				{ return xinputReportActive_ ? xinputAxis_[2] : switchProReportActive_ ? switchProAxis_[2] : GetCookedAxis(*pUsage_Axis2); }
+	float Get_Axis3() const				{ return xinputReportActive_ ? xinputAxis_[3] : switchProReportActive_ ? switchProAxis_[3] : GetCookedAxis(*pUsage_Axis3); }
+	float Get_Axis4() const				{ return xinputReportActive_ ? xinputAxis_[4] : switchProReportActive_ ? switchProAxis_[4] : GetCookedAxis(*pUsage_Axis4); }
+	float Get_Axis5() const				{ return xinputReportActive_ ? xinputAxis_[5] : switchProReportActive_ ? switchProAxis_[5] : GetCookedAxis(*pUsage_Axis5); }
+	float Get_Axis6() const				{ return xinputReportActive_ ? xinputAxis_[6] : switchProReportActive_ ? switchProAxis_[6] : GetCookedAxis(*pUsage_Axis6); }
+	float Get_Axis7() const				{ return xinputReportActive_ ? xinputAxis_[7] : switchProReportActive_ ? switchProAxis_[7] : GetCookedAxis(*pUsage_Axis7); }
+	float Get_Axis8() const				{ return xinputReportActive_ ? xinputAxis_[8] : switchProReportActive_ ? switchProAxis_[8] : GetCookedAxis(*pUsage_Axis8); }
 	uint32_t Get_HatSwitch() const {
+		if (xinputReportActive_) return xinputHatSwitch_;
+		if (switchProReportActive_) return switchProHatSwitch_;
 		if (!pUsage_HatSwitch->IsValid()) return 0;
 		const int32_t raw  = pUsage_HatSwitch->GetVariable(GetReport());
 		const int32_t lMin = pUsage_HatSwitch->GetLogicalMinimum();
@@ -566,9 +616,13 @@ public:
 public:
 	void ClearUsageAccessor();
 public:
-	virtual bool DoesAcceptUsage(uint32_t usage) override { return usage == 0x00010004 || usage == 0x00010005; }
+	virtual bool DoesAcceptUsage(uint32_t usage) override {
+		return usage == 0x00010004 || usage == 0x00010005 ||
+			(usage & 0xffff0000u) == 0xff000000u || (usage & 0xffff0000u) == 0xffa00000u;
+	}
 	virtual void OnMount() override;
 	virtual void OnUmount() override;
+	virtual void OnReport() override;
 };
 
 }

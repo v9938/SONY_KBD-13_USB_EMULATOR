@@ -458,8 +458,8 @@
 "\t\t\t\t\"Name\" : \"Key F12\" \n" \
 "\t\t\t} , \n" \
 "\t\t\t{ \n" \
-"\t\t\t\t\"Y\"    : [ 0, 0], \n" \
-"\t\t\t\t\"Mask\" : [ 0, 0], \n" \
+"\t\t\t\t\"Y\"    : [ 7, 0], \n" \
+"\t\t\t\t\"Mask\" : [ 16, 0], \n" \
 "\t\t\t\t\"Id\"   : \"0x46\", \n" \
 "\t\t\t\t\"Name\" : \"Key Print Screen\" \n" \
 "\t\t\t} , \n" \
@@ -536,8 +536,8 @@
 "\t\t\t\t\"Name\" : \"Key Up Arrow\" \n" \
 "\t\t\t} , \n" \
 "\t\t\t{ \n" \
-"\t\t\t\t\"Y\"    : [ 7, 8], \n" \
-"\t\t\t\t\"Mask\" : [ 1, 2], \n" \
+"\t\t\t\t\"Y\"    : [ 0, 0], \n" \
+"\t\t\t\t\"Mask\" : [ 0, 0], \n" \
 "\t\t\t\t\"Id\"   : \"0x53\", \n" \
 "\t\t\t\t\"Name\" : \"Key Num Lock and Clear\" \n" \
 "\t\t\t} , \n" \
@@ -1742,4 +1742,3 @@
 "\t\t] \n" \
 "\t} \n" \
 "}\n" \
-

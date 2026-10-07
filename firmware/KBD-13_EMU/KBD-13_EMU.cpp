@@ -47,6 +47,9 @@
 #include "gpadmap2.h"
 #include "gpadmap3.h"
 #include "gpadmap4.h"
+#include "gpadmap5.h"
+#include "gpadmap6.h"
+#include "gpadmap7.h"
 #include "ws2812.pio.h"
 #include "hbf500_dat_bus.pio.h"
 
@@ -85,10 +88,19 @@ using namespace jxglib;
 #define WS2812_POWER_STABILIZE_MS 10
 
 #define SETTING_SEC 5000
-#define STR_SEC 60
+#define STR_SEC 20
 #define BOOT_LONGPRESS_MS 5000
 #define BOOT_POLL_INTERVAL_MS 500
 #define BOOT_DEBOUNCE_MS 10
+#define KEYBOARD_LED_INPUT_DEBOUNCE_MS 50
+#define KEYBOARD_LED_RETRY_MS 100
+#define KEY_MATRIX_DIAGNOSTICS 1
+
+#define X68000Z_KEYBOARD_VID 0x33ddu
+#define X68000Z_KEYBOARD_PID 0x0011u
+#define X68000Z_LED_INSTANCE 1u
+#define X68000Z_LED_REPORT_ID 10u
+#define X68000Z_LED_KANA_INDEX 7u
 
 #define CFG_NONE   0   // 通常動作
 #define CFG_PRE    1   // 選択キー押下中（SETTING_SEC 待ち）
@@ -100,6 +112,8 @@ using namespace jxglib;
 // 出力値は s_keyMatrix[y] (bit=0→LOW、bit=1→HiZ)。
 // CAPS/KANA は LOW で LED 点灯 → s_keybordleds の CAPSLOCK/NUMLOCK ビットを更新。
 #define HBF500_ENABLE         1
+#define HBF500_DEBUG          0
+#define HBF500_DEBUG_INTERVAL_MS 1000u
 
 #define HBF500_DAT0_GPIO      3    // DAT0=GPIO3 .. DAT7=GPIO10
 #define HBF500_CS_GPIO        11    // CS  (入力、Low active)
@@ -183,6 +197,9 @@ static const SyncFile kFilesToSync[] = {
   {"GPADMAP2.JSN", JSON_GPAD_DEF2},
   {"GPADMAP3.JSN", JSON_GPAD_DEF3},
   {"GPADMAP4.JSN", JSON_GPAD_DEF4},
+  {"GPADMAP5.JSN", JSON_GPAD_DEF5},
+  {"GPADMAP6.JSN", JSON_GPAD_DEF6},
+  {"GPADMAP7.JSN", JSON_GPAD_DEF7},
   {"VIDCFG.INI",  "# VID(hex),PID(hex),ProfileFileName\n"},  // VID/PID → プロファイル対応表
 };
 
@@ -422,7 +439,8 @@ public:
 };
 
 // Parses a named JSON section into a Setting array.
-static int parse_settings(const char* json_string, const char* root_string, Setting* settings, size_t max_settings)
+static int parse_settings(const char* json_string, const char* root_string, Setting* settings,
+                          size_t max_settings, bool sectionRequired = true)
 {
   KeymapSectionParser parser(root_string, settings, max_settings);
   if (!parser.Parse(json_string)) {
@@ -434,7 +452,9 @@ static int parse_settings(const char* json_string, const char* root_string, Sett
     return -1;
   }
   if (!parser.FoundTargetArray()) {
-    ::printf("[LFS] %s parse failed: section not found\n", root_string);
+    if (sectionRequired) {
+      ::printf("[LFS] %s parse failed: section not found\n", root_string);
+    }
     return -1;
   }
   return static_cast<int>(parser.GetCount());
@@ -500,7 +520,9 @@ static int readAndSetKeymap(const char* pathName, int settingTableNumber)
     usageTable[settingTableNumber][decimal_value].y[0] = settings_u[table].y[0];
     usageTable[settingTableNumber][decimal_value].y[1] = settings_u[table].y[1];
 
-    if (settings_u[table].y[1] == 0) {
+    if (settings_u[table].y[0] == 0 && settings_u[table].y[1] == 0) {
+      continue;
+    } else if (settings_u[table].y[1] == 0) {
       if (modifierTable[settingTableNumber][1].y[0] != 0) {
         shiftTable[settingTableNumber][decimal_value].mask[0] = modifierTable[settingTableNumber][1].mask[0];
         shiftTable[settingTableNumber][decimal_value].y[0] = modifierTable[settingTableNumber][1].y[0];
@@ -520,7 +542,7 @@ static int readAndSetKeymap(const char* pathName, int settingTableNumber)
     }
   }
 
-  num_settings = parse_settings(fileReadBuffer.get(), "Shift", settings_u, count_of(settings_u));
+  num_settings = parse_settings(fileReadBuffer.get(), "Shift", settings_u, count_of(settings_u), false);
   if (num_settings > 0) {
     for (table = 0; table < num_settings; table++) {
       uint8_t decimal_value = static_cast<uint8_t>(::strtol(settings_u[table].id, &endptr, 0));
@@ -701,6 +723,23 @@ static int            s_gpadConfigSettingNumber = 0; // 使用中 GamePad プロ
 // キーボード LED ビットフィールド（CAPSLOCK/NUMLOCK/SCROLLLOCK）
 // Keyboard LED bitfield mirrored from the host report.
 static uint8_t        s_keybordleds     = 0;
+static uint8_t        s_keyboardLedOutput = 0;
+static uint8_t        s_keyboardLedDesired = 0;
+static bool           s_keyboardLedUpdatePending = true;
+static uint32_t       s_keyboardLedRetryAtMs = 0;
+static uint8_t        s_keyboardLedDeviceAddress = 0;
+static uint8_t        s_keyboardLedInstance = 0;
+// X68000Z固有の65バイトFeature ReportによるかなLED制御状態。
+static uint8_t        s_x68000zLedReport[65] = {};
+static uint8_t        s_x68000zKanaLedDesired = 0;
+static bool           s_x68000zLedUpdatePending = true;
+static uint32_t       s_x68000zLedRetryAtMs = 0;
+enum class KeyboardLedTransfer : uint8_t {
+  None,
+  Standard,
+  X68000Z,
+};
+static KeyboardLedTransfer s_keyboardLedTransfer = KeyboardLedTransfer::None;
 // Board LED 点滅間隔 [ms]（BLINK_* 定数で更新）
 // ボード LED の点滅間隔。
 static uint32_t       s_blink_interval_ms = BLINK_NOT_MOUNTED;
@@ -729,6 +768,7 @@ static int s_configSettingNumber = 0;
 static uint8_t  s_configMode      = CFG_NONE; // 現在の設定モード
 // Selected profile number during config mode.
 static uint8_t  s_numProfile      = 0;        // 選択中のプロファイル番号
+static uint32_t s_configEndMs     = 0;        // 選択キー長押しの確定時刻
 // Enables key-ID dump output.
 static bool     s_keyboardIDMode  = false;    // キーID ダンプ出力フラグ
 
@@ -767,6 +807,8 @@ static volatile bool           s_hbf500SelfTestActive = false;
 static volatile uint16_t       s_hbf500SelfTestYCount[11] = {0};
 static bool                    s_hbf500SelfTestPassed = false;
 static bool                    s_hbf500SelfTestPassPending = false;
+// KBD-13_HOST drives both LED inputs low to request a fresh self-test run.
+static bool                    s_hbf500SelfTestRestartLatched = false;
 
 // modifier 遷移検出の内部状態（keyboardStrTask 前後でリセット可能にする）
 // Previous modifier state for the valid-B slot.
@@ -823,46 +865,44 @@ static const char* kMsxKeyNameTable[12][8] = {
 // Prints the currently selected MSX matrix keys.
 static void print_msx_selected_keys()
 {
-  bool hasAny = false;
-  for (int y = 0; y < static_cast<int>(count_of(s_msxMatrixPressed)); ++y) {
-    if (s_msxMatrixPressed[y] != 0) {
-      hasAny = true;
-      break;
-    }
-  }
-  if (!hasAny) {
-    ::printf("[MSXKEY] none\n");
-    return;
-  }
-
-  ::printf("[MSXKEY]");
+#if KEY_MATRIX_DIAGNOSTICS
+  char line[256];
+  size_t length = static_cast<size_t>(::snprintf(line, sizeof(line), "[MSXKEY]"));
   for (int y = 0; y < static_cast<int>(count_of(s_msxMatrixPressed)); ++y) {
     for (int x = 7; x >= 0; --x) {
       if (s_msxMatrixPressed[y] & (1u << x)) {
         const char* keyName = kMsxKeyNameTable[y][x];
-        if (keyName != nullptr) {
-          ::printf(" [%s]", keyName);
+        if (keyName != nullptr && length < sizeof(line)) {
+          const int written = ::snprintf(line + length, sizeof(line) - length, " [%s]", keyName);
+          if (written < 0) continue;
+          const size_t added = static_cast<size_t>(written);
+          length += added < sizeof(line) - length ? added : sizeof(line) - length;
         }
       }
     }
   }
-  ::printf("\n");
+  if (length == sizeof("[MSXKEY]") - 1u) {
+    ::snprintf(line + length, sizeof(line) - length, " none");
+  }
+  ::printf("%s\n", line);
+#endif
 }
 
 // MSX マトリクス 1 位置の押下ビットマップを更新する。
-static void update_msx_selected_keys(uint8_t y, uint8_t x, bool pressed)
+static bool update_msx_selected_keys(uint8_t y, uint8_t x, bool pressed)
 {
-  if (y == 0) return;
+  if (y == 0) return false;
   uint8_t yIndex = static_cast<uint8_t>(y - 1);
-  if (yIndex >= static_cast<uint8_t>(count_of(s_msxMatrixPressed))) return;
-  if (x >= 8) return;
+  if (yIndex >= static_cast<uint8_t>(count_of(s_msxMatrixPressed))) return false;
+  if (x >= 8) return false;
   uint8_t bit = static_cast<uint8_t>(1u << x);
+  const uint8_t oldState = s_msxMatrixPressed[yIndex];
   if (pressed) {
     s_msxMatrixPressed[yIndex] = static_cast<uint8_t>(s_msxMatrixPressed[yIndex] | bit);
   } else {
     s_msxMatrixPressed[yIndex] = static_cast<uint8_t>(s_msxMatrixPressed[yIndex] & static_cast<uint8_t>(~bit));
   }
-  print_msx_selected_keys();
+  return oldState != s_msxMatrixPressed[yIndex];
 }
 
 // 押下ビットマップと HB-F500 の出力バッファをクリアする。
@@ -966,8 +1006,25 @@ static int s_hbf500Sm = -1;
 static uint s_hbf500PioOffset = 0;
 static inline void hbf500_set_hiZ_low(uint8_t val, uint32_t mask, int shiftBase);
 static void hbf500_core1_entry();  // Core 1 ポーリングループ前方宣言
+static void start_hbf500_selftest();
 
-static int y_table[16] = {
+#if HBF500_DEBUG
+struct Hbf500DebugSnapshot {
+  uint32_t irqCount;
+  uint32_t lateCount;
+  uint32_t fifoFullCount;
+  uint32_t yCount[16];
+  uint32_t lastGpio;
+  uint8_t lastY;
+  uint8_t lastValue;
+  uint8_t lastMatrixValue;
+};
+
+static volatile Hbf500DebugSnapshot s_hbf500Debug = {};
+#endif
+
+// Core 1 IRQから参照するため、最適化でrodataへ移されないようvolatileにする。
+static volatile uint8_t y_table[16] = {
   // 入力 nibble は bit0=DAT4, bit1=DAT5, bit2=DAT6, bit3=DAT7。
   // Y の bit 配列は DAT7..DAT4 の逆順になるため、この表で反転する。
   0x0, 0x8, 0x4, 0xC, 0x2, 0xA, 0x6, 0xE,
@@ -1046,7 +1103,7 @@ static void hbf500_init()
   gpio_init(HBF500_CAPS_GPIO);
   gpio_set_dir(HBF500_CAPS_GPIO, GPIO_IN);
   gpio_pull_up(HBF500_CAPS_GPIO);
-  // KANA LED 信号 (GPIO26): 入力、プルアップ
+  // NUM LED 信号 (GPIO13): 入力、プルアップ
   gpio_init(HBF500_KANA_GPIO);
   gpio_set_dir(HBF500_KANA_GPIO, GPIO_IN);
   gpio_pull_up(HBF500_KANA_GPIO);
@@ -1076,8 +1133,11 @@ static void hbf500_init()
 // CS=LOW検出時にDAT4-7を読み、CS=HIGH になるまでPIOへ値を送り続ける。
 // PIOはCS=LOW中もループしてFIFOを消費し続けるため、
 // 継続的に送信しないとY変化に追従できない。
-static void hbf500_cs_irq_handler()
+static void __not_in_flash_func(hbf500_cs_irq_handler)()
 {
+  // 200ns程度のCS LOW期間内にCSとDAT4-7を最優先で同時取得する。
+  const uint32_t gpioAll = gpio_get_all();
+
   // CSピンの立ち下がりイベントか確認してからクリア
   if (!(gpio_get_irq_event_mask(HBF500_CS_GPIO) & GPIO_IRQ_EDGE_FALL)) return;
   gpio_acknowledge_irq(HBF500_CS_GPIO, GPIO_IRQ_EDGE_FALL);
@@ -1086,16 +1146,39 @@ static void hbf500_cs_irq_handler()
 
   // CS=LOW の間、DAT4-7 を読みながら PIO へ値を送り続ける
 //  while (!(gpio_get_all() & (1u << HBF500_CS_GPIO))) {
-    const uint32_t gpioAll = gpio_get_all();
     const uint8_t y = static_cast<uint8_t>(y_table[(gpioAll >> kDatShift) & 0x0Fu]);
     s_hbf500CurrentY = y;
-    const uint8_t val = (y < static_cast<uint8_t>(count_of(s_keyMatrix))) ? s_keyMatrix[y] : 0xFFu;
+    uint8_t val = (y < static_cast<uint8_t>(count_of(s_keyMatrix))) ? s_keyMatrix[y] : 0xFFu;
+#if HBF500_DEBUG
+    ++s_hbf500Debug.irqCount;
+    if (gpioAll & (1u << HBF500_CS_GPIO)) ++s_hbf500Debug.lateCount;
+    ++s_hbf500Debug.yCount[y];
+    s_hbf500Debug.lastGpio = gpioAll;
+    s_hbf500Debug.lastY = y;
+    s_hbf500Debug.lastMatrixValue = val;
+#endif
+    // Y15 is outside the HB-F500 matrix and is reserved as a fixture-only
+    // diagnostic channel while selftest.do is active. Bits 0 and 1 mirror
+    // the active-low CAPS and NUM inputs; 0xa4 in bits 2..7 is the signature.
+    if (y == 15u &&
+        (s_hbf500SelfTestActive || s_hbf500SelfTestPassed || s_hbf500SelfTestPassPending)) {
+      val = static_cast<uint8_t>(0xA4u |
+          (gpio_get(HBF500_CAPS_GPIO) ? 0x01u : 0u) |
+          (gpio_get(HBF500_KANA_GPIO) ? 0x02u : 0u));
+    }
     if (!pio_sm_is_tx_fifo_full(s_hbf500Pio, static_cast<uint>(s_hbf500Sm))) {
       pio_sm_put(s_hbf500Pio, static_cast<uint>(s_hbf500Sm), static_cast<uint32_t>(val));
+#if HBF500_DEBUG
+      s_hbf500Debug.lastValue = val;
+#endif
       if (s_hbf500SelfTestActive && y < static_cast<uint8_t>(count_of(s_hbf500SelfTestYCount)) &&
           s_hbf500SelfTestYCount[y] != UINT16_MAX) {
         ++s_hbf500SelfTestYCount[y];
       }
+#if HBF500_DEBUG
+    } else {
+      ++s_hbf500Debug.fifoFullCount;
+#endif
     }
 //  }
 }
@@ -1115,7 +1198,7 @@ static void hbf500_core1_entry()
 #else
   static constexpr uint kGpioIrq = IO_IRQ_BANK0;
 #endif
-  irq_add_shared_handler(kGpioIrq, hbf500_cs_irq_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+  irq_set_exclusive_handler(kGpioIrq, hbf500_cs_irq_handler);
   gpio_set_irq_enabled(HBF500_CS_GPIO, GPIO_IRQ_EDGE_FALL, true);
   irq_set_priority(kGpioIrq, 0);
   irq_set_enabled(kGpioIrq, true);
@@ -1138,21 +1221,104 @@ static inline void hbf500_set_hiZ_low(uint8_t val, uint32_t mask, int shiftBase)
   gpio_set_dir_masked(mask, (~valShifted) & mask);
 }
 
+#if HBF500_DEBUG
+// Core 1のIRQ統計を1秒ごとに単一行で出力する。IRQ内ではprintfしない。
+static void hbf500_debug_task()
+{
+  static uint32_t lastPrintMs = 0;
+  static uint32_t previousIrqCount = 0;
+  static uint32_t previousLateCount = 0;
+  static uint32_t previousFifoFullCount = 0;
+  static uint32_t previousYCount[16] = {};
+  const uint32_t nowMs = to_ms_since_boot(get_absolute_time());
+  if (static_cast<uint32_t>(nowMs - lastPrintMs) < HBF500_DEBUG_INTERVAL_MS) return;
+  lastPrintMs = nowMs;
+
+  Hbf500DebugSnapshot snapshot;
+  // 32bit単位で取得する。Core 0のIRQ禁止ではCore 1を止められないため使用しない。
+  snapshot.irqCount = s_hbf500Debug.irqCount;
+  snapshot.lateCount = s_hbf500Debug.lateCount;
+  snapshot.fifoFullCount = s_hbf500Debug.fifoFullCount;
+  for (int y = 0; y < 16; ++y) snapshot.yCount[y] = s_hbf500Debug.yCount[y];
+  snapshot.lastGpio = s_hbf500Debug.lastGpio;
+  snapshot.lastY = s_hbf500Debug.lastY;
+  snapshot.lastValue = s_hbf500Debug.lastValue;
+  snapshot.lastMatrixValue = s_hbf500Debug.lastMatrixValue;
+
+  char yCounts[160];
+  size_t length = 0;
+  yCounts[0] = '\0';
+  for (int y = 0; y < 16 && length < sizeof(yCounts); ++y) {
+    const uint32_t delta = snapshot.yCount[y] - previousYCount[y];
+    previousYCount[y] = snapshot.yCount[y];
+    const int written = ::snprintf(yCounts + length, sizeof(yCounts) - length,
+                                   "%s%d:%lu", y == 0 ? "" : ",", y,
+                                   static_cast<unsigned long>(delta));
+    if (written < 0) break;
+    const size_t added = static_cast<size_t>(written);
+    length += added < sizeof(yCounts) - length ? added : sizeof(yCounts) - length;
+  }
+
+  const uint32_t irqDelta = snapshot.irqCount - previousIrqCount;
+  const uint32_t lateDelta = snapshot.lateCount - previousLateCount;
+  const uint32_t fifoDelta = snapshot.fifoFullCount - previousFifoFullCount;
+  previousIrqCount = snapshot.irqCount;
+  previousLateCount = snapshot.lateCount;
+  previousFifoFullCount = snapshot.fifoFullCount;
+  ::printf("[HBFDBG] irq=%lu late=%lu fifo=%lu lastY=%u matrix=%02x out=%02x gpio=%08lx y={%s}\n",
+           static_cast<unsigned long>(irqDelta), static_cast<unsigned long>(lateDelta),
+           static_cast<unsigned long>(fifoDelta), snapshot.lastY,
+           snapshot.lastMatrixValue, snapshot.lastValue,
+           static_cast<unsigned long>(snapshot.lastGpio), yCounts);
+}
+#endif
+
 // 入力側をサンプリングしながら HB-F500 のマトリクス出力を維持する。
 static void hbf500_matrix_task()
 {
+  static uint8_t candidateLeds = 0;
+  static uint32_t candidateSinceMs = 0;
+  static bool candidateInitialized = false;
   const uint32_t gpioAll = gpio_get_all();
+  const uint32_t nowMs = to_ms_since_boot(get_absolute_time());
 
   // DAT0-7 の出力と CS エッジ処理は Core 1 (hbf500_core1_entry) が担当するため、
-  // ここでは CAPS/KANA LED 状態の更新のみ行う。
+  // ここでは CAPS/NUM LED 状態の更新のみ行う。
 
-  // CAPS (GPIO10) LOW → CAPSLOCK(bit1)、KANA (GPIO26) LOW → NUMLOCK(bit0)
+  // GPIO12 LOW → CAPSLOCK(bit1)、GPIO13 LOW → NUMLOCK(bit0) + KANA(bit4)
   const bool caps = !static_cast<bool>((gpioAll >> HBF500_CAPS_GPIO) & 1u);
-  const bool kana = !static_cast<bool>((gpioAll >> HBF500_KANA_GPIO) & 1u);
+  const bool num = !static_cast<bool>((gpioAll >> HBF500_KANA_GPIO) & 1u);
   uint8_t leds = s_keybordleds;
   leds = caps ? static_cast<uint8_t>(leds | 0x02u) : static_cast<uint8_t>(leds & ~0x02u);
-  leds = kana ? static_cast<uint8_t>(leds | 0x01u) : static_cast<uint8_t>(leds & ~0x01u);
-  s_keybordleds = leds;
+  leds = num ? static_cast<uint8_t>(leds | 0x01u) : static_cast<uint8_t>(leds & ~0x01u);
+  leds = num ? static_cast<uint8_t>(leds | 0x10u) : static_cast<uint8_t>(leds & ~0x10u);
+
+  // HB-F500 LED signals can toggle faster than an HID control transfer.
+  // Apply a state only after both inputs have been stable for this interval.
+  if (!candidateInitialized || leds != candidateLeds) {
+    candidateLeds = leds;
+    candidateSinceMs = nowMs;
+    candidateInitialized = true;
+  } else if (candidateLeds != s_keybordleds &&
+             static_cast<uint32_t>(nowMs - candidateSinceMs) >= KEYBOARD_LED_INPUT_DEBOUNCE_MS) {
+    s_keybordleds = candidateLeds;
+  }
+
+  const bool selfTestAvailable = s_hbf500SelfTestActive ||
+                                 s_hbf500SelfTestPassed ||
+                                 s_hbf500SelfTestPassPending;
+  const bool restartRequested = (s_keybordleds & 0x03u) == 0x03u;
+  if (selfTestAvailable && restartRequested && !s_hbf500SelfTestRestartLatched) {
+    s_hbf500SelfTestRestartLatched = true;
+    s_keyboardStrMode = false;
+    s_keyboardStrWaitRelease = false;
+    s_keyboardStrClearPending = false;
+    s_keyboardStr.reset();
+    clear_msx_selected_keys();
+    start_hbf500_selftest();
+  } else if (!restartRequested) {
+    s_hbf500SelfTestRestartLatched = false;
+  }
 }
 #endif  // HBF500_ENABLE
 
@@ -1161,9 +1327,7 @@ static void hbf500_matrix_task()
 static void matrix_action_emit(const char* tableName, const char* slotName, uint8_t usage, const MatrixTable& matrix, bool pressed)
 {
   if (matrix.y[0] != 0) {
-    ::printf("[MATRIX] %-8s %-2s usage=0x%02x y=%u mask=%u %s\n",
-      tableName, slotName, usage, matrix.y[0], matrix.mask[0], pressed ? "DOWN" : "UP");
-    update_msx_selected_keys(matrix.y[0], matrix.mask[0], pressed);
+    const bool stateChanged = update_msx_selected_keys(matrix.y[0], matrix.mask[0], pressed);
     // KeyMatrix 更新 (bit=0=押下, bit=1=離し, HiZ-Low 出力用)
     const uint8_t yIdx0 = static_cast<uint8_t>(matrix.y[0] - 1u);
     if (yIdx0 < static_cast<uint8_t>(count_of(s_keyMatrix))) {
@@ -1171,6 +1335,18 @@ static void matrix_action_emit(const char* tableName, const char* slotName, uint
       if (pressed) s_keyMatrix[yIdx0] &= static_cast<uint8_t>(~bit0);
       else         s_keyMatrix[yIdx0] |= bit0;
     }
+#if KEY_MATRIX_DIAGNOSTICS
+    if (stateChanged) {
+      ::printf("[MATRIX] %-8s %-2s usage=0x%02x y=%u mask=%u %s\n",
+        tableName, slotName, usage, matrix.y[0], matrix.mask[0], pressed ? "DOWN" : "UP");
+      print_msx_selected_keys();
+    }
+#else
+    (void)tableName;
+    (void)slotName;
+    (void)usage;
+    (void)stateChanged;
+#endif
   }
   // スロット B (y[1]/mask[1]) の KeyMatrix 更新
   if (matrix.y[1] != 0) {
@@ -1309,6 +1485,22 @@ static void stop_hbf500_selftest()
   s_hbf500SelfTestActive = false;
   s_hbf500SelfTestPassed = false;
   s_hbf500SelfTestPassPending = false;
+  s_hbf500SelfTestRestartLatched = false;
+}
+
+// HID Keyboard/Keypad usage tableで定義されているキーコードならtrue。
+static bool is_defined_keycode(uint8_t usbKeycode)
+{
+  return usbKeycode >= HID_KEY_A && usbKeycode <= 0xE7u;
+}
+
+// 選択中のJSONキーマップにキーコードの割り当てがあればtrue。
+static bool has_json_keymap(uint8_t usbKeycode, bool shifted)
+{
+  const MatrixTable& matrix = shifted
+    ? shiftTable[s_configSettingNumber][usbKeycode]
+    : usageTable[s_configSettingNumber][usbKeycode];
+  return has_matrix_value(matrix);
 }
 
 static void hbf500_selftest_task()
@@ -1546,8 +1738,6 @@ static inline bool find_key_in_report(const KeyboardReport* report, uint8_t keyc
 // 現在のキーボードレポートから設定モード状態機械を更新する。
 static void configModeCheck(const KeyboardReport* report)
 {
-  static uint32_t end_ms = 0;
-
   // anyKey: modifier または keycode が押されているかどうか
   bool anyKey = (report->modifier != 0x00);
   for (uint8_t i = 0; i < 6; i++) {
@@ -1570,50 +1760,8 @@ static void configModeCheck(const KeyboardReport* report)
       ::printf("[CFG] profile mode cancel\n");
       s_configMode = CFG_NONE;
       s_blink_interval_ms = BLINK_MOUNTED;
-      end_ms = 0;
+      s_configEndMs = 0;
       return;
-    }
-    // タイマー開始
-    if (end_ms == 0) {
-      end_ms = to_ms_since_boot(get_absolute_time()) + SETTING_SEC;
-    }
-    // SETTING_SEC 経過で確定
-    if (to_ms_since_boot(get_absolute_time()) > end_ms) {
-      s_configMode = CFG_ACTIVE;
-      end_ms = 0;
-      s_blink_interval_ms = BLINK_NOT_MOUNTED;
-      ::printf("[CFG] profile %d confirmed\n", s_numProfile);
-      if (s_numProfile < 10) {
-        if (s_configSettingNumber != (int)s_numProfile) {
-          s_configSettingNumber = (int)s_numProfile;
-          ::printf("[CFG] switching to KEYMAP%d.JSN\n", s_configSettingNumber);
-          {
-            char keymapFile[32];
-            ::snprintf(keymapFile, sizeof(keymapFile), "KEYMAP%d.JSN", s_configSettingNumber);
-            updateConfigNumberCSV("A:/VIDCFG.INI", s_vid, s_pid, keymapFile);
-          }
-          // プロファイル切替をマトリクス経由で文字表示する
-          {
-            char tmp[64];
-            ::snprintf(tmp, sizeof(tmp), " KEYMAP%d.JSN Select.", s_configSettingNumber);
-            queue_keyboard_string(tmp);
-          }
-        }
-      }
-      // numProfile=99: FW バージョン表示
-      if (s_numProfile == 99) {
-        ::printf("[CFG] FW: %s\n", SW_VERSION);
-        {
-          char tmp[64];
-          ::snprintf(tmp, sizeof(tmp), "FW: %s", SW_VERSION);
-          queue_keyboard_string(tmp);
-        }
-      }
-      // numProfile=98: キー ID ダンプ ON/OFF トグル
-      if (s_numProfile == 98) {
-        s_keyboardIDMode = !s_keyboardIDMode;
-        ::printf("[CFG] KeyID dump %s\n", s_keyboardIDMode ? "ON" : "OFF");
-      }
     }
     return;
   }
@@ -1629,7 +1777,7 @@ static void configModeCheck(const KeyboardReport* report)
                    || find_key_in_report(report, HID_KEY_I);
     if (profileKey) {
       s_configMode = CFG_PRE;
-      end_ms = 0;
+      s_configEndMs = to_ms_since_boot(get_absolute_time()) + SETTING_SEC;
       ::printf("[CFG] profile mode start\n");
       if (find_key_in_report(report, HID_KEY_Q)) s_numProfile = 0;
       else if (find_key_in_report(report, HID_KEY_W)) s_numProfile = 1;
@@ -1679,7 +1827,19 @@ static void process_kbd_report(const KeyboardReport* report)
     if (keycode == 0) continue;
     if (find_key_in_report(&s_prevKeyboardReport, keycode)) continue;
 
-    if (report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT)) {
+    if (!is_defined_keycode(keycode)) {
+      ::printf("Undefine KEYCODE: 0x%02x\n", keycode);
+      continue;
+    }
+
+    const bool shifted = (report->modifier &
+      (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT)) != 0;
+    if (!has_json_keymap(keycode, shifted)) {
+      ::printf("Undefine KEYCODE: 0x%02x\n", keycode);
+      continue;
+    }
+
+    if (shifted) {
       if (vaildisShiftTableA(keycode)) {
         shift2MatrixKeyB(keycode, true);
       } else {
@@ -2182,17 +2342,69 @@ static int updateConfigNumberCSV(const char* filename, uint16_t vidNum, uint16_t
 // ボード LED を更新し、キーボード LED 状態をホスト側へ転送する。
 static void led_blinking_task(USBHost::Keyboard& keyboard)
 {
-    static uint8_t  oldleds   = 0xFF;  // 初回強制送信のため 0xFF で初期化
+    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (keyboard.IsMounted()) {
+        USBHost::HID& hid = keyboard.GetHID();
+        const uint8_t devAddr = hid.GetDeviceAddress();
+        const uint8_t instance = hid.GetInstance();
+        if (devAddr != s_keyboardLedDeviceAddress || instance != s_keyboardLedInstance) {
+            s_keyboardLedDeviceAddress = devAddr;
+            s_keyboardLedInstance = instance;
+            s_keyboardLedDesired = static_cast<uint8_t>(s_keybordleds & 0x07u);
+            s_keyboardLedUpdatePending = true;
+            s_keyboardLedRetryAtMs = now_ms;
+            s_x68000zKanaLedDesired = (s_keybordleds & 0x10u) != 0 ? 1u : 0u;
+            s_x68000zLedUpdatePending = true;
+            s_x68000zLedRetryAtMs = now_ms;
+            s_keyboardLedTransfer = KeyboardLedTransfer::None;
+        }
 
-    // キーボード LED の変化をキーボードへ送信する
-    if (s_keybordleds != oldleds) {
-        if (keyboard.IsMounted() && keyboard.GetHID().IsSendReady()) {
-            keyboard.GetHID().SendReport(0, &s_keybordleds, sizeof(s_keybordleds));
-            oldleds = s_keybordleds;
+        const uint8_t standardLeds = static_cast<uint8_t>(s_keybordleds & 0x07u);
+        if (standardLeds != s_keyboardLedDesired) {
+            s_keyboardLedDesired = standardLeds;
+            s_keyboardLedUpdatePending = true;
+            s_keyboardLedRetryAtMs = now_ms;
+        }
+
+        const bool isX68000Z = s_vid == X68000Z_KEYBOARD_VID && s_pid == X68000Z_KEYBOARD_PID;
+        const uint8_t kanaOn = (s_keybordleds & 0x10u) != 0 ? 1u : 0u;
+        if (isX68000Z && kanaOn != s_x68000zKanaLedDesired) {
+            s_x68000zKanaLedDesired = kanaOn;
+            s_x68000zLedUpdatePending = true;
+            s_x68000zLedRetryAtMs = now_ms;
+        }
+
+        // EP0制御転送は1件ずつ送る。失敗時は次回試行まで100ms以上空ける。
+        if (s_keyboardLedTransfer == KeyboardLedTransfer::None &&
+            s_keyboardLedUpdatePending &&
+            static_cast<int32_t>(now_ms - s_keyboardLedRetryAtMs) >= 0) {
+            s_keyboardLedOutput = s_keyboardLedDesired;
+            if (::tuh_hid_set_report(devAddr, instance, 0, HID_REPORT_TYPE_OUTPUT,
+                                     &s_keyboardLedOutput, sizeof(s_keyboardLedOutput))) {
+                s_keyboardLedUpdatePending = false;
+                s_keyboardLedTransfer = KeyboardLedTransfer::Standard;
+            } else {
+                s_keyboardLedRetryAtMs = now_ms + KEYBOARD_LED_RETRY_MS;
+            }
+        } else if (s_keyboardLedTransfer == KeyboardLedTransfer::None && isX68000Z &&
+                   s_x68000zLedUpdatePending &&
+                   static_cast<int32_t>(now_ms - s_x68000zLedRetryAtMs) >= 0 &&
+                   ::tuh_hid_mounted(devAddr, X68000Z_LED_INSTANCE)) {
+                ::memset(s_x68000zLedReport, 0, sizeof(s_x68000zLedReport));
+                s_x68000zLedReport[0] = X68000Z_LED_REPORT_ID;
+                s_x68000zLedReport[1] = 0xf8u;
+                s_x68000zLedReport[X68000Z_LED_KANA_INDEX] = s_x68000zKanaLedDesired ? 0xffu : 0x00u;
+                if (::tuh_hid_set_report(devAddr, X68000Z_LED_INSTANCE,
+                                         X68000Z_LED_REPORT_ID, HID_REPORT_TYPE_FEATURE,
+                                         s_x68000zLedReport, sizeof(s_x68000zLedReport))) {
+                    s_x68000zLedUpdatePending = false;
+                    s_keyboardLedTransfer = KeyboardLedTransfer::X68000Z;
+                } else {
+                    s_x68000zLedRetryAtMs = now_ms + KEYBOARD_LED_RETRY_MS;
+                }
         }
     }
 
-    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     const uint8_t boardBlue = calc_breath_brightness(now_ms, s_blink_interval_ms);
     const uint8_t fastPulse = calc_breath_brightness(now_ms, BLINK_FAST);
     const bool keyPressed = has_any_msx_selected_key();
@@ -2219,6 +2431,87 @@ static void led_blinking_task(USBHost::Keyboard& keyboard)
     }
 
     led_backend_set_rgb(redLevel, greenLevel, blueLevel);
+}
+
+// 新規ゲームパッドは登録順にGPADMAP0～7へ割り当て、9台目以降は7へ集約する。
+static int findNextGpadConfigNumberCSV()
+{
+    int registeredGamepads = 0;
+    if (s_pidTable) {
+        for (int i = 0; i < s_pidMaxNumber; i++) {
+            int gpadmapIndex = -1;
+            if (::sscanf(s_pidTable[i].profileFileName, "GPADMAP%d.JSN", &gpadmapIndex) == 1) {
+                registeredGamepads++;
+            }
+        }
+    }
+    return registeredGamepads < 7 ? registeredGamepads : 7;
+}
+
+extern "C" void host_hid_keyboard_led_set_report_complete(uint8_t devAddr, uint8_t instance,
+                                                             uint8_t reportId, uint8_t reportType,
+                                                             uint16_t len)
+{
+  if (devAddr != s_keyboardLedDeviceAddress) return;
+  const uint32_t nowMs = to_ms_since_boot(get_absolute_time());
+  if (s_keyboardLedTransfer == KeyboardLedTransfer::X68000Z &&
+      reportId == X68000Z_LED_REPORT_ID && reportType == HID_REPORT_TYPE_FEATURE &&
+      instance == X68000Z_LED_INSTANCE) {
+    s_keyboardLedTransfer = KeyboardLedTransfer::None;
+    if (len != sizeof(s_x68000zLedReport)) {
+      s_x68000zLedUpdatePending = true;
+      s_x68000zLedRetryAtMs = nowMs + KEYBOARD_LED_RETRY_MS;
+    } else if (s_x68000zLedReport[X68000Z_LED_KANA_INDEX] !=
+               (s_x68000zKanaLedDesired ? 0xffu : 0x00u)) {
+      s_x68000zLedUpdatePending = true;
+      s_x68000zLedRetryAtMs = nowMs;
+    }
+    return;
+  }
+  if (s_keyboardLedTransfer == KeyboardLedTransfer::Standard &&
+      reportId == 0 && reportType == HID_REPORT_TYPE_OUTPUT &&
+      instance == s_keyboardLedInstance) {
+    s_keyboardLedTransfer = KeyboardLedTransfer::None;
+    if (len != sizeof(s_keyboardLedOutput)) {
+      s_keyboardLedUpdatePending = true;
+      s_keyboardLedRetryAtMs = nowMs + KEYBOARD_LED_RETRY_MS;
+    } else if (s_keyboardLedOutput != s_keyboardLedDesired) {
+      s_keyboardLedUpdatePending = true;
+      s_keyboardLedRetryAtMs = nowMs;
+    }
+  }
+}
+
+// HIDレポートが変化しない長押し中も、メインループから確定時刻を評価する。
+static void configModeTask()
+{
+  if (s_configMode != CFG_PRE || s_configEndMs == 0) return;
+  if (static_cast<int32_t>(to_ms_since_boot(get_absolute_time()) - s_configEndMs) < 0) return;
+
+  s_configMode = CFG_ACTIVE;
+  s_configEndMs = 0;
+  s_blink_interval_ms = BLINK_NOT_MOUNTED;
+  ::printf("[CFG] profile %d confirmed\n", s_numProfile);
+  if (s_numProfile < 10 && s_configSettingNumber != (int)s_numProfile) {
+    s_configSettingNumber = (int)s_numProfile;
+    ::printf("[CFG] switching to KEYMAP%d.JSN\n", s_configSettingNumber);
+    char keymapFile[32];
+    ::snprintf(keymapFile, sizeof(keymapFile), "KEYMAP%d.JSN", s_configSettingNumber);
+    updateConfigNumberCSV("A:/VIDCFG.INI", s_vid, s_pid, keymapFile);
+    char tmp[64];
+    ::snprintf(tmp, sizeof(tmp), " KEYMAP%d.JSN Select.", s_configSettingNumber);
+    queue_keyboard_string(tmp);
+  }
+  if (s_numProfile == 99) {
+    ::printf("[CFG] Release Date: %s\n", __DATE__);
+    char tmp[64];
+    ::snprintf(tmp, sizeof(tmp), "Release Date: %s", __DATE__);
+    queue_keyboard_string(tmp);
+  }
+  if (s_numProfile == 98) {
+    s_keyboardIDMode = !s_keyboardIDMode;
+    ::printf("[CFG] KeyID dump %s\n", s_keyboardIDMode ? "ON" : "OFF");
+  }
 }
 
 // LFS 更新後にキーマップ、ゲームパッドマップ、VIDCFG.INI を再読込する。
@@ -2454,6 +2747,13 @@ static void boot_button_long_press_task()
   if ((nowMs - s_bootselLastPollMs) < BOOT_POLL_INTERVAL_MS) return;
   s_bootselLastPollMs = nowMs;
 
+  // BOOTSEL取得ではCore 1を一時停止するため、キー処理中は実行しない。
+  if (s_keyboardAnyKeyPressed || has_any_msx_selected_key()) {
+    s_bootButtonPressStartMs = 0;
+    s_bootLongPressHandled = false;
+    return;
+  }
+
   const bool pressed = read_bootsel_button_pressed();
 
   if (pressed != s_bootselRawPressed) {
@@ -2570,6 +2870,7 @@ static void emit_gamepad_matrix_changed(const char* slotName, uint8_t usageCode,
 // ゲームパッドを監視してボタン、Hat、軸のマッピングを処理する。
 static void gamepad_monitor_task(USBHost::GamePad& gamePad)
 {
+  gamePad.SwitchProTask();
   if (!gamePad.HasReportChanged()) return;
   if (!gamePad.IsSwitchProReady()) return;
 
@@ -2645,7 +2946,7 @@ int main() {
   initialize_bootsel_long_press();
   ::printf("ILF SONY External Keyboard Unit for SONY HB-F500/900\n");
   ::printf("Copyright @v9938 "); // 起動画面
-  ::printf("Release Data: %s\n\n",__DATE__);
+  ::printf("Release Date: %s\n\n", __DATE__);
 
   LFS::Flash driveA("A:", 0x10100000, 0x00040000);
   (void)driveA;
@@ -2660,7 +2961,6 @@ int main() {
   while (true) {
     handle_usb_msc_events();
     process_usb_msc_events();
-    boot_button_long_press_task();
 
     // キーボードの接続/切断を検出して VID/PID → キーマップ番号を設定する
     bool currentMounted = keyboard.IsMounted();
@@ -2678,15 +2978,29 @@ int main() {
       ::printf("[KBD] using profile %d\n", s_configSettingNumber);
       s_blink_interval_ms = BLINK_MOUNTED;
       s_keyboardMounted = true;
+      s_keyboardLedUpdatePending = true;
+      s_keyboardLedRetryAtMs = 0;
+      s_x68000zLedUpdatePending = true;
+      s_x68000zLedRetryAtMs = 0;
+      s_keyboardLedTransfer = KeyboardLedTransfer::None;
       clear_msx_selected_keys();
+      s_prevKeyboardReport = {0, {0, 0, 0, 0, 0, 0}};
+      s_keyboardAnyKeyPressed = false;
+      reset_modifier_transition_state();
     } else if (!currentMounted && s_keyboardMounted) {
       // 切断イベント: 状態をリセットする
       ::printf("[KBD] unmounted\n");
       s_keyboardMounted = false;
       s_vid = 0;
       s_pid = 0;
+      s_keyboardLedUpdatePending = true;
+      s_x68000zLedUpdatePending = true;
+      s_keyboardLedTransfer = KeyboardLedTransfer::None;
       s_blink_interval_ms = BLINK_NOT_MOUNTED;
       clear_msx_selected_keys();
+      s_prevKeyboardReport = {0, {0, 0, 0, 0, 0, 0}};
+      s_keyboardAnyKeyPressed = false;
+      reset_modifier_transition_state();
     }
 
     // GamePad の接続/切断を検出する
@@ -2698,9 +3012,10 @@ int main() {
       // VID/PID → GamePad プロファイル番号を検索
       int gcfg = findGpadConfigNumberCSV(s_gvid, s_gpid);
       if (gcfg < 0) {
-        // 未登録: プロファイル 0 をデフォルトとして登録する
-        gcfg = 0;
-        updateConfigNumberCSV("A:/VIDCFG.INI", s_gvid, s_gpid, "GPADMAP0.JSN");
+        gcfg = findNextGpadConfigNumberCSV();
+        char newGpadProfile[32];
+        ::snprintf(newGpadProfile, sizeof(newGpadProfile), "GPADMAP%d.JSN", gcfg);
+        updateConfigNumberCSV("A:/VIDCFG.INI", s_gvid, s_gpid, newGpadProfile);
       }
       s_gpadConfigSettingNumber = gcfg;
 
@@ -2728,18 +3043,23 @@ int main() {
     }
 
     // 未マウント時の不要処理を抑止する
-    if (s_keyboardMounted) {
+    if (s_keyboardMounted && keyboard.HasReportChanged()) {
       print_keyboard_keycodes(keyboard);
     }
+    configModeTask();
+    boot_button_long_press_task();
     if (s_gamePadMounted) {
       gamepad_monitor_task(gamePad);
     }
-    led_blinking_task(keyboard);
-    keyboardStrTask();
 #if HBF500_ENABLE
     hbf500_matrix_task();
     hbf500_selftest_task();
+#if HBF500_DEBUG
+    hbf500_debug_task();
 #endif
+#endif
+    led_blinking_task(keyboard);
+    keyboardStrTask();
     Tickable::Tick();
   }
 }
