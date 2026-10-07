@@ -1,0 +1,2053 @@
+        .Z80
+        ASEG
+        ORG 4000H
+
+ENASLT EQU 024H ; ENASLT
+SNSMAT EQU 0141H ; SNSMAT
+RSLREG EQU 0138H ; RSLREG
+SCRMOD EQU 0FCAFH ; SCRMOD
+EXPTBL EQU 0FCC1H ; EXPTBL
+CAPST EQU 0FCABH ; CAPST
+KANAST EQU 0FCACH ; KANAST
+ROW_VALUES EQU 0C000H ; ROW_VALUES
+LAST_VALUES EQU 0C00BH ; LAST_VALUES
+FORCE_DRAW EQU 0C016H ; FORCE_DRAW
+DISPLAY_MODE EQU 0C017H ; DISPLAY_MODE
+LAST_DISPLAY_MODE EQU 0C018H ; LAST_DISPLAY_MODE
+VAR_ROW EQU 0C020H ; VAR_ROW
+VAR_MASK EQU 0C021H ; VAR_MASK
+VAR_X EQU 0C022H ; VAR_X
+VAR_Y EQU 0C023H ; VAR_Y
+VAR_W EQU 0C024H ; VAR_W
+VAR_H EQU 0C025H ; VAR_H
+VAR_TX EQU 0C026H ; VAR_TX
+VAR_TY EQU 0C027H ; VAR_TY
+VAR_LEN EQU 0C028H ; VAR_LEN
+VAR_LABEL EQU 0C029H ; VAR_LABEL
+VAR_NEXT EQU 0C02BH ; VAR_NEXT
+VAR_FILL EQU 0C02DH ; VAR_FILL
+VAR_BORDER EQU 0C02EH ; VAR_BORDER
+VAR_TEXT EQU 0C02FH ; VAR_TEXT
+VAR_CURY EQU 0C030H ; VAR_CURY
+VAR_ROWS_LEFT EQU 0C031H ; VAR_ROWS_LEFT
+VAR_CHAR_X EQU 0C032H ; VAR_CHAR_X
+VAR_PIX_X EQU 0C033H ; VAR_PIX_X
+VAR_PIX_Y EQU 0C034H ; VAR_PIX_Y
+VAR_FONT_PTR EQU 0C035H ; VAR_FONT_PTR
+VAR_FONT_BITS EQU 0C037H ; VAR_FONT_BITS
+VAR_FONT_ROWS EQU 0C038H ; VAR_FONT_ROWS
+VAR_FONT_COLS EQU 0C039H ; VAR_FONT_COLS
+VAR_LABEL_PTR EQU 0C03AH ; VAR_LABEL_PTR
+VAR_LABEL_LEFT EQU 0C03CH ; VAR_LABEL_LEFT
+VAR_STYLE EQU 0C03DH ; VAR_STYLE
+VAR_LABEL_W EQU 0C03EH ; VAR_LABEL_W
+
+; Cartridge header: AB, entry 4010H, no BASIC extensions.
+        DB 041H,042H
+        DW app_start
+        DW 00H
+        DW 00H
+        DW 00H
+        REPT 6
+        DB 00H
+        ENDM
+app_start: ; app_start (4010H)
+        LD SP,0F380H
+        CALL map_cartridge_page2
+        CALL init_screen7
+        CALL init_palette
+        CALL clear_screen7
+        CALL draw_branding
+        CALL init_last_rows
+        CALL scan_rows
+        CALL read_display_mode
+        CALL copy_display_mode
+        LD A,01H
+        LD (FORCE_DRAW),A
+        EI
+main_loop: ; main_loop (4034H)
+        CALL scan_rows
+        CALL check_display_mode
+        DI
+        CALL update_keys
+        EI
+        CALL copy_rows
+        HALT
+        JP main_loop
+map_cartridge_page2: ; map_cartridge_page2 (4046H)
+        CALL RSLREG
+        RRCA
+        RRCA
+        AND 03H
+        LD C,A
+        LD B,00H
+        LD HL,EXPTBL
+        ADD HL,BC
+        LD A,(HL)
+        AND 080H
+        OR C
+        JP P,page2_slot_ready
+        LD C,A
+        INC HL
+        INC HL
+        INC HL
+        INC HL
+        LD A,(HL)
+        AND 0CH
+        OR C
+page2_slot_ready: ; page2_slot_ready (4064H)
+        LD H,080H
+        CALL ENASLT
+        RET
+init_last_rows: ; init_last_rows (406AH)
+        LD HL,LAST_VALUES
+        LD B,0BH
+        XOR A
+init_last_loop: ; init_last_loop (4070H)
+        LD (HL),A
+        INC HL
+        DJNZ init_last_loop
+        RET
+scan_rows: ; scan_rows (4075H)
+        LD HL,ROW_VALUES
+        LD B,0BH
+        XOR A
+        LD C,A
+scan_loop: ; scan_loop (407CH)
+        LD A,C
+        PUSH BC
+        PUSH HL
+        CALL SNSMAT
+        POP HL
+        POP BC
+        LD (HL),A
+        INC HL
+        INC C
+        DJNZ scan_loop
+        RET
+copy_rows: ; copy_rows (408AH)
+        LD HL,ROW_VALUES
+        LD DE,LAST_VALUES
+        LD B,0BH
+copy_rows_loop: ; copy_rows_loop (4092H)
+        LD A,(HL)
+        LD (DE),A
+        INC HL
+        INC DE
+        DJNZ copy_rows_loop
+        XOR A
+        LD (FORCE_DRAW),A
+        CALL copy_display_mode
+        RET
+read_display_mode: ; read_display_mode (40A0H)
+        LD A,(KANAST)
+        OR A
+        JR Z,display_mode_caps
+        LD A,(CAPST)
+        OR A
+        JR Z,display_mode_hiragana
+        LD A,03H
+        JR display_mode_store
+display_mode_hiragana: ; display_mode_hiragana (40B0H)
+        LD A,02H
+        JR display_mode_store
+display_mode_caps: ; display_mode_caps (40B4H)
+        LD A,(CAPST)
+        OR A
+        JR Z,display_mode_lower
+        LD A,01H
+        JR display_mode_store
+display_mode_lower: ; display_mode_lower (40BEH)
+        XOR A
+display_mode_store: ; display_mode_store (40BFH)
+        LD (DISPLAY_MODE),A
+        RET
+check_display_mode: ; check_display_mode (40C3H)
+        CALL read_display_mode
+        LD B,A
+        LD A,(LAST_DISPLAY_MODE)
+        CP B
+        RET Z
+        LD A,01H
+        LD (FORCE_DRAW),A
+        RET
+copy_display_mode: ; copy_display_mode (40D2H)
+        LD A,(DISPLAY_MODE)
+        LD (LAST_DISPLAY_MODE),A
+        RET
+update_keys: ; update_keys (40D9H)
+        LD HL,key_entries
+entry_loop: ; entry_loop (40DCH)
+        LD A,(HL)
+        CP 0FFH
+        RET Z
+        LD (VAR_ROW),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_MASK),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_STYLE),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_X),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_Y),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_W),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_H),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_TY),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_TX),A
+        INC HL
+        LD A,(HL)
+        LD (VAR_LABEL_W),A
+        INC HL
+        LD E,(HL)
+        INC HL
+        LD D,(HL)
+        INC HL
+        LD (VAR_NEXT),DE
+        LD A,(DISPLAY_MODE)
+        ADD A,A
+        LD E,A
+        LD D,00H
+        ADD HL,DE
+        LD E,(HL)
+        INC HL
+        LD D,(HL)
+        LD (VAR_LABEL),DE
+        LD A,(VAR_ROW)
+        LD E,A
+        LD D,00H
+        LD HL,ROW_VALUES
+        ADD HL,DE
+        LD A,(HL)
+        LD B,A
+        LD HL,LAST_VALUES
+        ADD HL,DE
+        LD A,(HL)
+        XOR B
+        LD C,A
+        LD A,(FORCE_DRAW)
+        OR A
+        JR NZ,entry_force_draw
+        LD A,(VAR_MASK)
+        AND C
+        JR Z,entry_skip
+entry_force_draw: ; entry_force_draw (4147H)
+        LD A,(VAR_MASK)
+        OR A
+        JR Z,entry_released
+        AND B
+        JR Z,entry_pressed
+entry_released: ; entry_released (4150H)
+        LD A,(VAR_STYLE)
+        OR A
+        JR NZ,entry_released_special
+        LD A,077H
+        LD (VAR_FILL),A
+        JR entry_released_colors
+entry_released_special: ; entry_released_special (415DH)
+        LD A,044H
+        LD (VAR_FILL),A
+entry_released_colors: ; entry_released_colors (4162H)
+        LD A,022H
+        LD (VAR_BORDER),A
+        LD A,011H
+        LD (VAR_TEXT),A
+        JR entry_draw
+entry_pressed: ; entry_pressed (416EH)
+        LD A,011H
+        LD (VAR_FILL),A
+        LD A,077H
+        LD (VAR_BORDER),A
+        LD A,077H
+        LD (VAR_TEXT),A
+entry_draw: ; entry_draw (417DH)
+        CALL draw_key
+entry_skip: ; entry_skip (4180H)
+        LD HL,(VAR_NEXT)
+        JP entry_loop
+draw_key: ; draw_key (4186H)
+        CALL draw_rect
+        LD A,(VAR_TX)
+        LD (VAR_X),A
+        LD A,(VAR_LABEL_W)
+        LD (VAR_W),A
+        LD HL,(VAR_LABEL)
+        LD (VAR_LABEL_PTR),HL
+        LD A,(VAR_TY)
+        LD (VAR_CURY),A
+        LD A,08H
+        LD (VAR_ROWS_LEFT),A
+        CALL draw_bitmap_rows
+        RET
+draw_branding: ; draw_branding (41AAH)
+        LD A,055H
+        LD (VAR_FILL),A
+        LD A,011H
+        LD (VAR_TEXT),A
+        LD A,05H
+        LD (VAR_X),A
+        LD A,02EH
+        LD (VAR_W),A
+        LD A,07H
+        LD (VAR_CURY),A
+        LD A,011H
+        LD (VAR_ROWS_LEFT),A
+        LD HL,brand_sony
+        LD (VAR_LABEL_PTR),HL
+        CALL draw_bitmap_rows
+        LD A,0CDH
+        LD (VAR_X),A
+        LD A,02EH
+        LD (VAR_W),A
+        LD A,07H
+        LD (VAR_CURY),A
+        LD A,012H
+        LD (VAR_ROWS_LEFT),A
+        LD HL,brand_hitbit
+        LD (VAR_LABEL_PTR),HL
+        CALL draw_bitmap_rows
+        RET
+draw_bitmap_rows: ; draw_bitmap_rows (41EFH)
+bitmap_row: ; bitmap_row (41EFH)
+        LD A,(VAR_CURY)
+        LD H,A
+        LD A,(VAR_X)
+        LD L,A
+        CALL vdp_set_write
+        LD HL,(VAR_LABEL_PTR)
+        LD A,(VAR_W)
+        LD B,A
+bitmap_byte: ; bitmap_byte (4201H)
+        LD A,(HL)
+        INC HL
+        OR A
+        JR Z,bitmap_fill
+        CP 03H
+        JR Z,bitmap_text
+        CP 02H
+        JR Z,bitmap_text_left
+        LD A,(VAR_FILL)
+        AND 0F0H
+        LD C,A
+        LD A,(VAR_TEXT)
+        AND 0FH
+        OR C
+        JR bitmap_out
+bitmap_text_left: ; bitmap_text_left (421CH)
+        LD A,(VAR_TEXT)
+        AND 0F0H
+        LD C,A
+        LD A,(VAR_FILL)
+        AND 0FH
+        OR C
+        JR bitmap_out
+bitmap_text: ; bitmap_text (422AH)
+        LD A,(VAR_TEXT)
+        JR bitmap_out
+bitmap_fill: ; bitmap_fill (422FH)
+        LD A,(VAR_FILL)
+bitmap_out: ; bitmap_out (4232H)
+        OUT (098H),A
+        DJNZ bitmap_byte
+        LD (VAR_LABEL_PTR),HL
+        LD A,(VAR_CURY)
+        INC A
+        LD (VAR_CURY),A
+        LD A,(VAR_ROWS_LEFT)
+        DEC A
+        LD (VAR_ROWS_LEFT),A
+        JR NZ,bitmap_row
+        RET
+draw_rect: ; draw_rect (424AH)
+        LD A,(VAR_Y)
+        LD (VAR_CURY),A
+        LD A,(VAR_H)
+        LD (VAR_ROWS_LEFT),A
+rect_row_loop: ; rect_row_loop (4256H)
+        LD A,(VAR_CURY)
+        LD H,A
+        LD A,(VAR_X)
+        LD L,A
+        CALL vdp_set_write
+        LD A,(VAR_ROWS_LEFT)
+        LD B,A
+        LD A,(VAR_H)
+        CP B
+        JR Z,rect_border_row
+        LD A,B
+        CP 01H
+        JR Z,rect_border_row
+        LD A,(VAR_BORDER)
+        OUT (098H),A
+        LD A,(VAR_W)
+        SUB 02H
+        LD B,A
+        LD A,(VAR_FILL)
+rect_fill_loop: ; rect_fill_loop (427EH)
+        OUT (098H),A
+        DJNZ rect_fill_loop
+        LD A,(VAR_BORDER)
+        OUT (098H),A
+        JR rect_next_row
+rect_border_row: ; rect_border_row (4289H)
+        LD A,(VAR_W)
+        LD B,A
+        LD A,(VAR_BORDER)
+rect_border_loop: ; rect_border_loop (4290H)
+        OUT (098H),A
+        DJNZ rect_border_loop
+rect_next_row: ; rect_next_row (4294H)
+        LD A,(VAR_CURY)
+        INC A
+        LD (VAR_CURY),A
+        LD A,(VAR_ROWS_LEFT)
+        DEC A
+        LD (VAR_ROWS_LEFT),A
+        JP NZ,rect_row_loop
+        RET
+draw_label: ; draw_label (42A6H)
+        LD HL,(VAR_LABEL)
+        LD (VAR_LABEL_PTR),HL
+        LD A,(VAR_LEN)
+        LD (VAR_LABEL_LEFT),A
+label_loop: ; label_loop (42B2H)
+        LD A,(VAR_LABEL_LEFT)
+        OR A
+        RET Z
+        LD HL,(VAR_LABEL_PTR)
+        LD A,(HL)
+        INC HL
+        LD B,A
+        LD A,(VAR_TX)
+        ADD A,B
+        LD (VAR_PIX_X),A
+        LD A,(HL)
+        INC HL
+        LD B,A
+        LD (VAR_LABEL_PTR),HL
+        LD A,(VAR_TY)
+        ADD A,B
+        LD (VAR_PIX_Y),A
+        CALL draw_2x2
+        LD A,(VAR_LABEL_LEFT)
+        SUB 02H
+        LD (VAR_LABEL_LEFT),A
+        JR label_loop
+draw_2x2: ; draw_2x2 (42DEH)
+        LD A,(VAR_PIX_Y)
+        LD H,A
+        LD A,(VAR_PIX_X)
+        LD L,A
+        CALL vdp_set_write
+        LD A,(VAR_TEXT)
+        OUT (098H),A
+        LD A,(VAR_PIX_Y)
+        INC A
+        LD H,A
+        LD A,(VAR_PIX_X)
+        LD L,A
+        CALL vdp_set_write
+        LD A,(VAR_TEXT)
+        OUT (098H),A
+        RET
+vdp_set_write: ; vdp_set_write (4300H)
+        DI
+        LD A,H
+        SRL A
+        SRL A
+        SRL A
+        SRL A
+        SRL A
+        SRL A
+        AND 03H
+        OUT (099H),A
+        NOP
+        NOP
+        NOP
+        NOP
+        LD A,08EH
+        OUT (099H),A
+        NOP
+        NOP
+        NOP
+        NOP
+        LD A,L
+        OUT (099H),A
+        NOP
+        NOP
+        NOP
+        NOP
+        LD A,H
+        AND 03FH
+        OR 040H
+        OUT (099H),A
+        NOP
+        NOP
+        NOP
+        NOP
+        RET
+init_screen7: ; init_screen7 (4331H)
+        DI
+        LD A,0AH
+        OUT (099H),A
+        LD A,080H
+        OUT (099H),A
+        LD A,060H
+        OUT (099H),A
+        LD A,081H
+        OUT (099H),A
+        LD A,01FH
+        OUT (099H),A
+        LD A,082H
+        OUT (099H),A
+        LD A,0AH
+        OUT (099H),A
+        LD A,088H
+        OUT (099H),A
+        LD A,080H
+        OUT (099H),A
+        LD A,089H
+        OUT (099H),A
+        LD A,00H
+        OUT (099H),A
+        LD A,08EH
+        OUT (099H),A
+        LD A,07H
+        LD (SCRMOD),A
+        EI
+        RET
+clear_screen7: ; clear_screen7 (4369H)
+        XOR A
+        LD (VAR_CURY),A
+clear_row: ; clear_row (436DH)
+        LD A,(VAR_CURY)
+        LD H,A
+        LD L,00H
+        CALL vdp_set_write
+        LD B,00H
+        LD A,055H
+clear_byte: ; clear_byte (437AH)
+        OUT (098H),A
+        DJNZ clear_byte
+        LD A,(VAR_CURY)
+        INC A
+        LD (VAR_CURY),A
+        CP 0D4H
+        JR NZ,clear_row
+        RET
+init_palette: ; init_palette (438AH)
+        DI
+        XOR A
+        OUT (099H),A
+        LD A,090H
+        OUT (099H),A
+        LD HL,palette_data
+        LD B,010H
+palette_loop: ; palette_loop (4397H)
+        LD A,(HL)
+        OUT (09AH),A
+        INC HL
+        LD A,(HL)
+        OUT (09AH),A
+        INC HL
+        DJNZ palette_loop
+        EI
+        RET
+palette_data: ; palette_data (43A3H)
+        DB 00H,00H,011H,01H,022H,02H,033H,03H,044H,04H,055H,05H,066H,06H,077H,07H
+        DB 00H,00H,011H,01H,022H,02H,033H,03H,044H,04H,055H,05H,066H,06H,077H,07H
+        REPT 15421
+        DB 0FFH
+        ENDM
+key_entries: ; key_entries (8000H)
+        DB 06H,020H,01H,05H,020H,013H,0FH,023H,0AH,09H
+        DW key_next_0
+        DW key_variant_0_0
+        DW key_variant_0_0
+        DW key_variant_0_0
+        DW key_variant_0_0
+key_variant_0_0: ; key_variant_0_0 (8014H)
+        DB 03H,03H,03H,02H,00H,00H,01H,00H,00H,02H,00H,00H,00H,00H,00H,03H
+        DB 00H,00H,02H,00H,00H,00H,00H,01H,01H,00H,00H,03H,03H,03H,00H,00H
+        DB 00H,01H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,02H,00H,00H
+        DB 00H,00H,00H,01H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_0: ; key_next_0 (805CH)
+        DB 06H,040H,01H,01AH,020H,013H,0FH,023H,01FH,09H
+        DW key_next_1
+        DW key_variant_1_0
+        DW key_variant_1_0
+        DW key_variant_1_0
+        DW key_variant_1_0
+key_variant_1_0: ; key_variant_1_0 (8070H)
+        DB 03H,03H,03H,02H,00H,03H,03H,03H,00H,02H,00H,00H,00H,00H,00H,00H
+        DB 00H,02H,02H,00H,00H,00H,00H,00H,00H,00H,02H,03H,03H,03H,00H,00H
+        DB 01H,03H,03H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H
+        DB 00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,03H,03H,03H,02H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_1: ; key_next_1 (80B8H)
+        DB 06H,080H,01H,02FH,020H,013H,0FH,023H,034H,09H
+        DW key_next_2
+        DW key_variant_2_0
+        DW key_variant_2_0
+        DW key_variant_2_0
+        DW key_variant_2_0
+key_variant_2_0: ; key_variant_2_0 (80CCH)
+        DB 03H,03H,03H,02H,00H,03H,03H,03H,00H,02H,00H,00H,00H,00H,00H,00H
+        DB 00H,02H,02H,00H,00H,00H,00H,00H,00H,00H,02H,03H,03H,03H,00H,00H
+        DB 01H,03H,03H,00H,02H,00H,00H,00H,00H,00H,00H,00H,02H,02H,00H,00H
+        DB 00H,00H,00H,00H,00H,02H,02H,00H,00H,00H,00H,03H,03H,03H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_2: ; key_next_2 (8114H)
+        DB 07H,01H,01H,044H,020H,013H,0FH,023H,049H,09H
+        DW key_next_3
+        DW key_variant_3_0
+        DW key_variant_3_0
+        DW key_variant_3_0
+        DW key_variant_3_0
+key_variant_3_0: ; key_variant_3_0 (8128H)
+        DB 03H,03H,03H,02H,00H,02H,00H,00H,02H,02H,00H,00H,00H,00H,02H,00H
+        DB 00H,02H,02H,00H,00H,00H,00H,02H,00H,00H,02H,03H,03H,03H,00H,00H
+        DB 03H,03H,03H,02H,02H,00H,00H,00H,00H,00H,00H,00H,02H,02H,00H,00H
+        DB 00H,00H,00H,00H,00H,02H,02H,00H,00H,00H,00H,00H,00H,00H,02H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_3: ; key_next_3 (8170H)
+        DB 07H,02H,01H,059H,020H,013H,0FH,023H,05EH,09H
+        DW key_next_4
+        DW key_variant_4_0
+        DW key_variant_4_0
+        DW key_variant_4_0
+        DW key_variant_4_0
+key_variant_4_0: ; key_variant_4_0 (8184H)
+        DB 03H,03H,03H,02H,00H,03H,03H,03H,02H,02H,00H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H,00H
+        DB 03H,03H,03H,00H,02H,00H,00H,00H,00H,00H,00H,00H,02H,02H,00H,00H
+        DB 00H,00H,00H,00H,00H,02H,02H,00H,00H,00H,00H,03H,03H,03H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_4: ; key_next_4 (81CCH)
+        DB 08H,02H,01H,070H,020H,01AH,0FH,023H,073H,013H
+        DW key_next_5
+        DW key_variant_5_0
+        DW key_variant_5_0
+        DW key_variant_5_0
+        DW key_variant_5_0
+key_variant_5_0: ; key_variant_5_0 (81E0H)
+        DB 02H,00H,00H,02H,00H,01H,03H,03H,00H,00H,02H,00H,00H,02H,00H,03H
+        DB 03H,03H,02H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,03H,00H,01H
+        DB 02H,00H,02H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H
+        DB 02H,02H,02H,02H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,02H,00H
+        DB 00H,02H,00H,02H,01H,00H,02H,00H,03H,03H,03H,00H,02H,00H,00H,02H
+        DB 00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,02H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,02H,00H,01H,03H,03H,00H,00H,02H,00H,00H,02H
+        DB 00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_5: ; key_next_5 (8278H)
+        DB 08H,04H,01H,08CH,020H,013H,0FH,023H,08EH,0EH
+        DW key_next_6
+        DW key_variant_6_0
+        DW key_variant_6_0
+        DW key_variant_6_0
+        DW key_variant_6_0
+key_variant_6_0: ; key_variant_6_0 (828CH)
+        DB 00H,01H,00H,00H,00H,02H,00H,00H,02H,00H,01H,03H,03H,00H,00H,01H
+        DB 00H,00H,00H,03H,00H,00H,02H,00H,02H,00H,00H,02H,00H,01H,00H,00H
+        DB 00H,02H,02H,00H,02H,00H,02H,00H,00H,00H,00H,01H,00H,00H,00H,02H
+        DB 01H,00H,02H,00H,01H,03H,03H,00H,00H,01H,00H,00H,00H,02H,00H,02H
+        DB 02H,00H,00H,00H,00H,02H,00H,01H,00H,00H,00H,02H,00H,01H,02H,00H
+        DB 02H,00H,00H,02H,00H,01H,00H,00H,00H,02H,00H,00H,02H,00H,01H,03H
+        DB 03H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_6: ; key_next_6 (82FCH)
+        DB 08H,08H,01H,0A1H,020H,013H,0FH,023H,0A3H,0EH
+        DW key_next_7
+        DW key_variant_7_0
+        DW key_variant_7_0
+        DW key_variant_7_0
+        DW key_variant_7_0
+key_variant_7_0: ; key_variant_7_0 (8310H)
+        DB 03H,03H,02H,00H,00H,03H,03H,03H,02H,00H,02H,00H,00H,00H,02H,00H
+        DB 01H,00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,02H
+        DB 00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,02H,00H,03H
+        DB 03H,03H,00H,00H,02H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 00H,00H,02H,00H,00H,00H,02H,00H,01H,00H,00H,02H,00H,00H,00H,00H
+        DB 02H,00H,00H,00H,03H,03H,02H,00H,00H,03H,03H,03H,02H,00H,03H,03H
+        DB 03H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_7: ; key_next_7 (8380H)
+        DB 07H,010H,01H,0B6H,020H,01AH,0FH,023H,0B9H,013H
+        DW key_next_8
+        DW key_variant_8_0
+        DW key_variant_8_0
+        DW key_variant_8_0
+        DW key_variant_8_0
+key_variant_8_0: ; key_variant_8_0 (8394H)
+        DB 01H,03H,03H,00H,00H,03H,03H,03H,02H,00H,01H,03H,03H,00H,00H,03H
+        DB 03H,03H,00H,02H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,02H,00H,00H,00H,00H,00H,01H,00H,00H,00H
+        DB 02H,00H,00H,02H,00H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,01H
+        DB 00H,00H,00H,02H,00H,00H,02H,00H,03H,03H,03H,00H,00H,00H,00H,02H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H
+        DB 00H,00H,01H,03H,03H,00H,00H,00H,01H,00H,00H,00H,01H,03H,03H,00H
+        DB 00H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_8: ; key_next_8 (842CH)
+        DB 07H,04H,01H,04H,04EH,012H,012H,053H,06H,0EH
+        DW key_next_9
+        DW key_variant_9_0
+        DW key_variant_9_0
+        DW key_variant_9_0
+        DW key_variant_9_0
+key_variant_9_0: ; key_variant_9_0 (8440H)
+        DB 03H,03H,03H,02H,00H,01H,03H,03H,00H,00H,01H,03H,03H,02H,02H,00H
+        DB 00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H,00H,01H
+        DB 03H,03H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+        DB 02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H
+        DB 02H,00H,00H,00H,03H,03H,03H,02H,00H,01H,03H,03H,00H,00H,01H,03H
+        DB 03H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_9: ; key_next_9 (84B0H)
+        DB 00H,02H,00H,018H,04EH,0BH,012H,053H,01BH,04H
+        DW key_next_10
+        DW key_variant_10_0
+        DW key_variant_10_0
+        DW key_variant_10_1
+        DW key_variant_10_2
+key_variant_10_0: ; key_variant_10_0 (84C4H)
+        DB 00H,01H,00H,00H,00H,03H,00H,00H,01H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_10_1: ; key_variant_10_1 (84E4H)
+        DB 00H,02H,00H,00H,03H,03H,03H,00H,00H,02H,00H,00H,01H,03H,03H,00H
+        DB 02H,02H,02H,02H,02H,03H,00H,02H,01H,02H,01H,00H,00H,00H,00H,00H
+key_variant_10_2: ; key_variant_10_2 (8504H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,01H,03H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H,00H
+key_next_10: ; key_next_10 (8524H)
+        DB 00H,04H,00H,024H,04EH,0BH,012H,053H,027H,04H
+        DW key_next_11
+        DW key_variant_11_0
+        DW key_variant_11_0
+        DW key_variant_11_1
+        DW key_variant_11_2
+key_variant_11_0: ; key_variant_11_0 (8538H)
+        DB 03H,03H,03H,00H,00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_variant_11_1: ; key_variant_11_1 (8558H)
+        DB 00H,00H,00H,00H,02H,00H,01H,00H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 01H,00H,00H,02H,01H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H
+key_variant_11_2: ; key_variant_11_2 (8578H)
+        DB 00H,00H,00H,02H,00H,00H,03H,00H,00H,03H,00H,00H,03H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_next_11: ; key_next_11 (8598H)
+        DB 00H,08H,00H,030H,04EH,0BH,012H,053H,033H,04H
+        DW key_next_12
+        DW key_variant_12_0
+        DW key_variant_12_0
+        DW key_variant_12_1
+        DW key_variant_12_2
+key_variant_12_0: ; key_variant_12_0 (85ACH)
+        DB 03H,03H,03H,00H,00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,00H,00H,00H,00H,00H
+key_variant_12_1: ; key_variant_12_1 (85CCH)
+        DB 00H,03H,02H,00H,00H,00H,00H,00H,01H,03H,03H,00H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_12_2: ; key_variant_12_2 (85ECH)
+        DB 00H,01H,00H,00H,03H,03H,03H,02H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_next_12: ; key_next_12 (860CH)
+        DB 00H,010H,00H,03CH,04EH,0BH,012H,053H,03FH,04H
+        DW key_next_13
+        DW key_variant_13_0
+        DW key_variant_13_0
+        DW key_variant_13_1
+        DW key_variant_13_2
+key_variant_13_0: ; key_variant_13_0 (8620H)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H
+key_variant_13_1: ; key_variant_13_1 (8640H)
+        DB 00H,03H,00H,00H,00H,00H,00H,00H,03H,03H,03H,00H,00H,00H,02H,00H
+        DB 00H,03H,00H,00H,01H,00H,02H,00H,02H,00H,03H,02H,00H,00H,00H,00H
+key_variant_13_2: ; key_variant_13_2 (8660H)
+        DB 00H,00H,00H,00H,03H,03H,03H,02H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_13: ; key_next_13 (8680H)
+        DB 00H,020H,00H,048H,04EH,0BH,012H,053H,04BH,04H
+        DW key_next_14
+        DW key_variant_14_0
+        DW key_variant_14_0
+        DW key_variant_14_1
+        DW key_variant_14_2
+key_variant_14_0: ; key_variant_14_0 (8694H)
+        DB 03H,03H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,00H,00H,00H,00H,00H
+key_variant_14_1: ; key_variant_14_1 (86B4H)
+        DB 00H,02H,00H,00H,01H,03H,01H,00H,00H,02H,00H,02H,01H,03H,03H,00H
+        DB 02H,02H,00H,02H,02H,02H,00H,02H,01H,02H,03H,00H,00H,00H,00H,00H
+key_variant_14_2: ; key_variant_14_2 (86D4H)
+        DB 00H,00H,01H,00H,03H,03H,03H,02H,00H,00H,03H,00H,00H,01H,01H,00H
+        DB 00H,02H,01H,00H,01H,00H,01H,00H,02H,00H,01H,00H,00H,00H,00H,00H
+key_next_14: ; key_next_14 (86F4H)
+        DB 00H,040H,00H,054H,04EH,0BH,012H,053H,057H,04H
+        DW key_next_15
+        DW key_variant_15_0
+        DW key_variant_15_0
+        DW key_variant_15_1
+        DW key_variant_15_2
+key_variant_15_0: ; key_variant_15_0 (8708H)
+        DB 01H,03H,03H,00H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_15_1: ; key_variant_15_1 (8728H)
+        DB 01H,00H,00H,00H,03H,03H,01H,00H,01H,00H,00H,02H,01H,00H,01H,00H
+        DB 02H,01H,03H,00H,02H,02H,01H,02H,00H,01H,02H,00H,00H,00H,00H,00H
+key_variant_15_2: ; key_variant_15_2 (8748H)
+        DB 00H,00H,02H,00H,03H,03H,03H,02H,00H,00H,02H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,01H,00H,00H,01H,02H,00H,00H,00H,00H,00H,00H
+key_next_15: ; key_next_15 (8768H)
+        DB 00H,080H,00H,060H,04EH,0BH,012H,053H,063H,04H
+        DW key_next_16
+        DW key_variant_16_0
+        DW key_variant_16_0
+        DW key_variant_16_1
+        DW key_variant_16_2
+key_variant_16_0: ; key_variant_16_0 (877CH)
+        DB 03H,03H,03H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H
+key_variant_16_1: ; key_variant_16_1 (879CH)
+        DB 02H,00H,00H,00H,02H,01H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,01H,00H,00H,02H,00H,03H,02H,00H,00H,00H,00H
+key_variant_16_2: ; key_variant_16_2 (87BCH)
+        DB 00H,00H,00H,00H,01H,03H,03H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_16: ; key_next_16 (87DCH)
+        DB 01H,01H,00H,06CH,04EH,0BH,012H,053H,06FH,04H
+        DW key_next_17
+        DW key_variant_17_0
+        DW key_variant_17_0
+        DW key_variant_17_1
+        DW key_variant_17_2
+key_variant_17_0: ; key_variant_17_0 (87F0H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_17_1: ; key_variant_17_1 (8810H)
+        DB 01H,00H,02H,00H,01H,00H,02H,00H,01H,03H,03H,00H,03H,01H,00H,02H
+        DB 02H,03H,01H,02H,02H,02H,02H,02H,01H,00H,03H,02H,00H,00H,00H,00H
+key_variant_17_2: ; key_variant_17_2 (8830H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,01H,02H,01H,00H,00H,01H,02H,00H
+        DB 00H,00H,03H,00H,00H,03H,00H,02H,03H,00H,00H,00H,00H,00H,00H,00H
+key_next_17: ; key_next_17 (8850H)
+        DB 01H,02H,00H,078H,04EH,0BH,012H,053H,07BH,04H
+        DW key_next_18
+        DW key_variant_18_0
+        DW key_variant_18_0
+        DW key_variant_18_1
+        DW key_variant_18_2
+key_variant_18_0: ; key_variant_18_0 (8864H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_18_1: ; key_variant_18_1 (8884H)
+        DB 01H,00H,00H,00H,01H,00H,03H,00H,03H,01H,00H,02H,01H,02H,00H,02H
+        DB 01H,00H,03H,02H,03H,01H,00H,02H,01H,00H,03H,02H,00H,00H,00H,00H
+key_variant_18_2: ; key_variant_18_2 (88A4H)
+        DB 00H,01H,00H,00H,03H,03H,03H,02H,00H,00H,00H,02H,00H,00H,03H,00H
+        DB 00H,03H,02H,00H,03H,01H,01H,02H,00H,01H,00H,00H,00H,00H,00H,00H
+key_next_18: ; key_next_18 (88C4H)
+        DB 00H,01H,00H,084H,04EH,0BH,012H,053H,087H,04H
+        DW key_next_19
+        DW key_variant_19_0
+        DW key_variant_19_0
+        DW key_variant_19_1
+        DW key_variant_19_2
+key_variant_19_0: ; key_variant_19_0 (88D8H)
+        DB 01H,03H,03H,00H,02H,00H,01H,02H,02H,00H,02H,02H,02H,01H,00H,02H
+        DB 02H,02H,00H,02H,03H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_19_1: ; key_variant_19_1 (88F8H)
+        DB 00H,00H,00H,00H,00H,03H,02H,00H,01H,01H,01H,00H,02H,01H,00H,02H
+        DB 02H,01H,00H,02H,02H,02H,00H,02H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_19_2: ; key_variant_19_2 (8918H)
+        DB 00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,03H,00H,00H,03H,00H,00H,00H,00H,00H,00H,00H
+key_next_19: ; key_next_19 (8938H)
+        DB 01H,04H,00H,090H,04EH,0BH,012H,053H,093H,04H
+        DW key_next_20
+        DW key_variant_20_0
+        DW key_variant_20_0
+        DW key_variant_20_1
+        DW key_variant_20_2
+key_variant_20_0: ; key_variant_20_0 (894CH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,01H,03H,03H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_variant_20_1: ; key_variant_20_1 (896CH)
+        DB 00H,00H,02H,00H,00H,02H,01H,00H,01H,00H,00H,00H,01H,01H,03H,00H
+        DB 01H,02H,00H,02H,00H,00H,00H,02H,00H,01H,03H,00H,00H,00H,00H,00H
+key_variant_20_2: ; key_variant_20_2 (898CH)
+        DB 01H,03H,03H,00H,00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_next_20: ; key_next_20 (89ACH)
+        DB 01H,08H,00H,09CH,04EH,0BH,012H,053H,09FH,04H
+        DW key_next_21
+        DW key_variant_21_0
+        DW key_variant_21_0
+        DW key_variant_21_1
+        DW key_variant_21_2
+key_variant_21_0: ; key_variant_21_0 (89C0H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,00H
+key_variant_21_1: ; key_variant_21_1 (89E0H)
+        DB 00H,02H,00H,02H,01H,00H,00H,02H,01H,00H,00H,02H,01H,01H,00H,02H
+        DB 00H,02H,00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H
+key_variant_21_2: ; key_variant_21_2 (8A00H)
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_next_21: ; key_next_21 (8A20H)
+        DB 01H,010H,00H,0A8H,04EH,0BH,012H,053H,0ABH,04H
+        DW key_next_22
+        DW key_variant_22_0
+        DW key_variant_22_0
+        DW key_variant_22_1
+        DW key_variant_22_2
+key_variant_22_0: ; key_variant_22_0 (8A34H)
+        DB 02H,00H,00H,02H,01H,00H,01H,00H,00H,02H,02H,00H,01H,03H,03H,00H
+        DB 00H,01H,00H,00H,01H,03H,03H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_22_1: ; key_variant_22_1 (8A54H)
+        DB 00H,03H,03H,00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,03H,03H,00H
+        DB 01H,01H,00H,02H,00H,02H,02H,02H,00H,01H,03H,00H,00H,00H,00H,00H
+key_variant_22_2: ; key_variant_22_2 (8A74H)
+        DB 01H,01H,00H,00H,01H,01H,00H,00H,01H,01H,00H,00H,01H,01H,00H,02H
+        DB 01H,01H,00H,02H,01H,01H,01H,00H,02H,01H,02H,00H,00H,00H,00H,00H
+key_next_22: ; key_next_22 (8A94H)
+        DB 07H,020H,01H,0B4H,04EH,015H,012H,053H,0BAH,09H
+        DW key_next_23
+        DW key_variant_23_0
+        DW key_variant_23_0
+        DW key_variant_23_0
+        DW key_variant_23_0
+key_variant_23_0: ; key_variant_23_0 (8AA8H)
+        DB 03H,03H,03H,00H,00H,01H,03H,03H,00H,02H,00H,00H,02H,00H,02H,00H
+        DB 00H,02H,02H,00H,00H,02H,00H,02H,00H,00H,00H,03H,03H,03H,00H,00H
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,00H,00H,00H,00H,02H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,03H,03H,03H,00H,00H,01H,03H,03H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_23: ; key_next_23 (8AF0H)
+        DB 07H,08H,01H,04H,064H,016H,012H,069H,08H,0EH
+        DW key_next_24
+        DW key_variant_24_0
+        DW key_variant_24_0
+        DW key_variant_24_0
+        DW key_variant_24_0
+key_variant_24_0: ; key_variant_24_0 (8B04H)
+        DB 03H,03H,03H,02H,00H,01H,03H,03H,00H,00H,03H,03H,03H,00H,00H,01H
+        DB 00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,01H,00H,00H
+        DB 00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,01H,00H,00H,00H,03H
+        DB 03H,03H,02H,00H,03H,03H,03H,00H,00H,01H,00H,00H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,00H,01H,00H,00H,00H,02H,00H,00H,02H,00H
+        DB 02H,00H,00H,02H,00H,01H,00H,00H,00H,02H,00H,00H,02H,00H,03H,03H
+        DB 03H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_24: ; key_next_24 (8B74H)
+        DB 04H,040H,00H,01BH,064H,0BH,012H,069H,01EH,04H
+        DW key_next_25
+        DW key_variant_25_0
+        DW key_variant_25_1
+        DW key_variant_25_2
+        DW key_variant_25_3
+key_variant_25_0: ; key_variant_25_0 (8B88H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,01H,00H,00H,00H,00H,00H
+key_variant_25_1: ; key_variant_25_1 (8BA8H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,02H,01H,00H,02H
+        DB 02H,00H,02H,02H,02H,00H,01H,00H,01H,03H,02H,02H,00H,00H,00H,00H
+key_variant_25_2: ; key_variant_25_2 (8BC8H)
+        DB 01H,00H,00H,00H,03H,03H,01H,00H,01H,00H,02H,02H,01H,00H,02H,00H
+        DB 01H,00H,02H,00H,01H,00H,02H,00H,02H,01H,00H,00H,00H,00H,00H,00H
+key_variant_25_3: ; key_variant_25_3 (8BE8H)
+        DB 00H,02H,00H,00H,03H,03H,03H,02H,00H,02H,00H,02H,00H,02H,00H,02H
+        DB 01H,00H,00H,02H,01H,00H,00H,02H,02H,00H,03H,02H,00H,00H,00H,00H
+key_next_25: ; key_next_25 (8C08H)
+        DB 05H,010H,00H,027H,064H,0BH,012H,069H,02AH,04H
+        DW key_next_26
+        DW key_variant_26_0
+        DW key_variant_26_1
+        DW key_variant_26_2
+        DW key_variant_26_3
+key_variant_26_0: ; key_variant_26_0 (8C1CH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,01H,01H,00H,01H,01H,01H,00H
+        DB 01H,01H,01H,00H,01H,01H,01H,00H,00H,02H,02H,00H,00H,00H,00H,00H
+key_variant_26_1: ; key_variant_26_1 (8C3CH)
+        DB 02H,01H,00H,02H,02H,01H,00H,02H,02H,01H,00H,02H,02H,02H,02H,02H
+        DB 02H,02H,02H,02H,01H,00H,01H,00H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_26_2: ; key_variant_26_2 (8C5CH)
+        DB 00H,02H,00H,00H,03H,03H,03H,00H,00H,01H,00H,00H,03H,03H,03H,02H
+        DB 00H,00H,02H,00H,02H,00H,00H,00H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_26_3: ; key_variant_26_3 (8C7CH)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,03H,03H,03H,02H,00H,01H,00H,00H
+        DB 03H,03H,03H,02H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H
+key_next_26: ; key_next_26 (8C9CH)
+        DB 03H,04H,00H,033H,064H,0BH,012H,069H,036H,04H
+        DW key_next_27
+        DW key_variant_27_0
+        DW key_variant_27_1
+        DW key_variant_27_2
+        DW key_variant_27_3
+key_variant_27_0: ; key_variant_27_0 (8CB0H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,03H,03H,00H,01H,00H,00H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_27_1: ; key_variant_27_1 (8CD0H)
+        DB 03H,03H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_variant_27_2: ; key_variant_27_2 (8CF0H)
+        DB 00H,00H,03H,00H,00H,03H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H
+        DB 01H,00H,00H,00H,00H,03H,00H,00H,00H,00H,03H,00H,00H,00H,00H,00H
+key_variant_27_3: ; key_variant_27_3 (8D10H)
+        DB 01H,03H,03H,02H,01H,00H,00H,02H,01H,00H,00H,02H,02H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_next_27: ; key_next_27 (8D30H)
+        DB 04H,080H,00H,03FH,064H,0BH,012H,069H,042H,04H
+        DW key_next_28
+        DW key_variant_28_0
+        DW key_variant_28_1
+        DW key_variant_28_2
+        DW key_variant_28_3
+key_variant_28_0: ; key_variant_28_0 (8D44H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,01H,02H,00H,01H,02H,01H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H
+key_variant_28_1: ; key_variant_28_1 (8D64H)
+        DB 03H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,00H
+        DB 02H,00H,02H,00H,02H,00H,01H,00H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_28_2: ; key_variant_28_2 (8D84H)
+        DB 02H,00H,01H,00H,02H,03H,03H,02H,02H,00H,01H,00H,02H,00H,01H,00H
+        DB 02H,00H,01H,00H,02H,00H,01H,00H,01H,00H,02H,00H,00H,00H,00H,00H
+key_variant_28_3: ; key_variant_28_3 (8DA4H)
+        DB 01H,00H,00H,00H,01H,03H,03H,02H,01H,00H,01H,00H,02H,00H,01H,00H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,01H,03H,00H,00H,00H,00H,00H,00H
+key_next_28: ; key_next_28 (8DC4H)
+        DB 05H,02H,00H,04BH,064H,0BH,012H,069H,04EH,04H
+        DW key_next_29
+        DW key_variant_29_0
+        DW key_variant_29_1
+        DW key_variant_29_2
+        DW key_variant_29_3
+key_variant_29_0: ; key_variant_29_0 (8DD8H)
+        DB 00H,00H,00H,00H,00H,01H,00H,00H,01H,03H,03H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,03H,00H,00H,00H,00H,00H
+key_variant_29_1: ; key_variant_29_1 (8DF8H)
+        DB 03H,03H,03H,02H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_29_2: ; key_variant_29_2 (8E18H)
+        DB 01H,03H,02H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,01H,00H,00H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_29_3: ; key_variant_29_3 (8E38H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_29: ; key_next_29 (8E58H)
+        DB 05H,040H,00H,057H,064H,0BH,012H,069H,05AH,04H
+        DW key_next_30
+        DW key_variant_30_0
+        DW key_variant_30_1
+        DW key_variant_30_2
+        DW key_variant_30_3
+key_variant_30_0: ; key_variant_30_0 (8E6CH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 00H,03H,03H,00H,00H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_30_1: ; key_variant_30_1 (8E8CH)
+        DB 02H,00H,00H,02H,01H,00H,01H,00H,00H,02H,02H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_30_2: ; key_variant_30_2 (8EACH)
+        DB 02H,00H,01H,00H,02H,03H,03H,02H,02H,00H,01H,00H,02H,00H,01H,00H
+        DB 02H,01H,03H,00H,02H,02H,01H,02H,01H,01H,03H,00H,00H,00H,00H,00H
+key_variant_30_3: ; key_variant_30_3 (8ECCH)
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,00H
+key_next_30: ; key_next_30 (8EECH)
+        DB 05H,04H,00H,063H,064H,0BH,012H,069H,066H,04H
+        DW key_next_31
+        DW key_variant_31_0
+        DW key_variant_31_1
+        DW key_variant_31_2
+        DW key_variant_31_3
+key_variant_31_0: ; key_variant_31_0 (8F00H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_31_1: ; key_variant_31_1 (8F20H)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_31_2: ; key_variant_31_2 (8F40H)
+        DB 03H,02H,00H,00H,00H,02H,02H,00H,01H,00H,03H,00H,02H,00H,02H,02H
+        DB 02H,00H,02H,00H,02H,01H,00H,00H,01H,02H,00H,00H,00H,00H,00H,00H
+key_variant_31_3: ; key_variant_31_3 (8F60H)
+        DB 02H,00H,00H,00H,02H,00H,03H,02H,03H,03H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,03H,02H,00H,00H,00H,00H
+key_next_31: ; key_next_31 (8F80H)
+        DB 03H,040H,00H,06FH,064H,0BH,012H,069H,072H,04H
+        DW key_next_32
+        DW key_variant_32_0
+        DW key_variant_32_1
+        DW key_variant_32_2
+        DW key_variant_32_3
+key_variant_32_0: ; key_variant_32_0 (8F94H)
+        DB 00H,01H,00H,00H,00H,00H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_32_1: ; key_variant_32_1 (8FB4H)
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_32_2: ; key_variant_32_2 (8FD4H)
+        DB 00H,02H,00H,00H,00H,01H,02H,00H,00H,02H,00H,00H,00H,01H,01H,00H
+        DB 02H,00H,02H,02H,02H,02H,02H,02H,01H,01H,02H,00H,00H,00H,00H,00H
+key_variant_32_3: ; key_variant_32_3 (8FF4H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,01H,00H
+        DB 00H,00H,01H,00H,00H,01H,02H,00H,03H,02H,00H,00H,00H,00H,00H,00H
+key_next_32: ; key_next_32 (9014H)
+        DB 04H,010H,00H,07BH,064H,0BH,012H,069H,07EH,04H
+        DW key_next_33
+        DW key_variant_33_0
+        DW key_variant_33_1
+        DW key_variant_33_2
+        DW key_variant_33_3
+key_variant_33_0: ; key_variant_33_0 (9028H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_33_1: ; key_variant_33_1 (9048H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_33_2: ; key_variant_33_2 (9068H)
+        DB 00H,00H,00H,00H,00H,02H,00H,00H,01H,01H,00H,00H,02H,00H,02H,00H
+        DB 00H,00H,01H,00H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H,00H
+key_variant_33_3: ; key_variant_33_3 (9088H)
+        DB 00H,00H,00H,00H,00H,02H,00H,00H,01H,01H,00H,00H,02H,00H,02H,00H
+        DB 00H,00H,01H,00H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_33: ; key_next_33 (90A8H)
+        DB 04H,020H,00H,087H,064H,0BH,012H,069H,08AH,04H
+        DW key_next_34
+        DW key_variant_34_0
+        DW key_variant_34_1
+        DW key_variant_34_2
+        DW key_variant_34_3
+key_variant_34_0: ; key_variant_34_0 (90BCH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,03H,02H,00H,01H,00H,00H,00H,00H,00H,00H,00H
+key_variant_34_1: ; key_variant_34_1 (90DCH)
+        DB 03H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_variant_34_2: ; key_variant_34_2 (90FCH)
+        DB 02H,03H,03H,02H,02H,00H,01H,00H,02H,03H,03H,02H,02H,00H,01H,00H
+        DB 02H,01H,03H,00H,02H,02H,01H,02H,01H,01H,03H,00H,00H,00H,00H,00H
+key_variant_34_3: ; key_variant_34_3 (911CH)
+        DB 00H,01H,00H,00H,03H,03H,03H,02H,00H,01H,00H,00H,01H,01H,01H,00H
+        DB 01H,01H,01H,00H,02H,01H,00H,02H,02H,01H,00H,02H,00H,00H,00H,00H
+key_next_34: ; key_next_34 (913CH)
+        DB 01H,020H,00H,093H,064H,0BH,012H,069H,096H,04H
+        DW key_next_35
+        DW key_variant_35_0
+        DW key_variant_35_0
+        DW key_variant_35_1
+        DW key_variant_35_2
+key_variant_35_0: ; key_variant_35_0 (9150H)
+        DB 00H,03H,02H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_35_1: ; key_variant_35_1 (9170H)
+        DB 01H,00H,00H,00H,01H,02H,03H,00H,03H,01H,01H,00H,01H,02H,01H,00H
+        DB 01H,00H,01H,00H,03H,00H,01H,00H,01H,00H,00H,02H,00H,00H,00H,00H
+key_variant_35_2: ; key_variant_35_2 (9190H)
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H
+        DB 01H,00H,00H,02H,01H,00H,03H,00H,01H,03H,00H,00H,00H,00H,00H,00H
+key_next_35: ; key_next_35 (91B0H)
+        DB 01H,040H,00H,09FH,064H,0BH,012H,069H,0A2H,04H
+        DW key_next_36
+        DW key_variant_36_0
+        DW key_variant_36_0
+        DW key_variant_36_1
+        DW key_variant_36_2
+key_variant_36_0: ; key_variant_36_0 (91C4H)
+        DB 00H,03H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,00H,02H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_36_1: ; key_variant_36_1 (91E4H)
+        DB 01H,03H,03H,00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,03H,03H,00H
+        DB 03H,00H,00H,02H,00H,00H,00H,02H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_36_2: ; key_variant_36_2 (9204H)
+        DB 03H,03H,03H,02H,02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_36: ; key_next_36 (9224H)
+        DB 07H,080H,01H,0ACH,064H,015H,028H,074H,0AFH,0EH
+        DW key_next_37
+        DW key_variant_37_0
+        DW key_variant_37_0
+        DW key_variant_37_0
+        DW key_variant_37_0
+key_variant_37_0: ; key_variant_37_0 (9238H)
+        DB 03H,03H,03H,00H,00H,03H,03H,03H,02H,00H,03H,03H,03H,02H,02H,00H
+        DB 00H,02H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,02H,00H,00H,02H
+        DB 00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,03H,03H,03H,00H,00H,03H
+        DB 03H,03H,00H,00H,00H,01H,00H,00H,02H,00H,02H,00H,00H,02H,00H,00H
+        DB 00H,00H,00H,01H,00H,00H,02H,00H,01H,00H,00H,02H,00H,00H,00H,00H
+        DB 00H,01H,00H,00H,02H,00H,00H,02H,00H,03H,03H,03H,02H,00H,00H,01H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_37: ; key_next_37 (92A8H)
+        DB 06H,02H,01H,04H,07AH,01AH,012H,07FH,07H,013H
+        DW key_next_38
+        DW key_variant_38_0
+        DW key_variant_38_0
+        DW key_variant_38_0
+        DW key_variant_38_0
+key_variant_38_0: ; key_variant_38_0 (92BCH)
+        DB 01H,03H,03H,02H,00H,03H,03H,03H,02H,00H,03H,03H,03H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H,00H
+        DB 02H,00H,00H,02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,01H
+        DB 00H,00H,00H,03H,03H,03H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,02H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,00H,00H,01H,00H,00H,00H,02H,00H,01H,00H,00H,02H,00H
+        DB 00H,00H,01H,03H,03H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,02H
+        DB 00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_38: ; key_next_38 (9354H)
+        DB 02H,040H,00H,01EH,07AH,0BH,012H,07FH,021H,04H
+        DW key_next_39
+        DW key_variant_39_0
+        DW key_variant_39_1
+        DW key_variant_39_2
+        DW key_variant_39_3
+key_variant_39_0: ; key_variant_39_0 (9368H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,02H,00H,00H,00H,01H,00H
+        DB 00H,03H,03H,00H,01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_39_1: ; key_variant_39_1 (9388H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_39_2: ; key_variant_39_2 (93A8H)
+        DB 00H,01H,00H,00H,03H,03H,03H,02H,00H,00H,02H,00H,00H,00H,01H,00H
+        DB 02H,00H,00H,00H,01H,00H,00H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_39_3: ; key_variant_39_3 (93C8H)
+        DB 01H,00H,01H,00H,03H,03H,03H,02H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_next_39: ; key_next_39 (93E8H)
+        DB 05H,01H,00H,02AH,07AH,0BH,012H,07FH,02DH,04H
+        DW key_next_40
+        DW key_variant_40_0
+        DW key_variant_40_1
+        DW key_variant_40_2
+        DW key_variant_40_3
+key_variant_40_0: ; key_variant_40_0 (93FCH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,00H,01H,00H,00H,00H
+        DB 00H,03H,02H,00H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_variant_40_1: ; key_variant_40_1 (941CH)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,00H,01H,03H,03H,00H
+        DB 00H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_40_2: ; key_variant_40_2 (943CH)
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H
+        DB 01H,00H,00H,02H,00H,02H,01H,00H,00H,01H,02H,00H,00H,00H,00H,00H
+key_variant_40_3: ; key_variant_40_3 (945CH)
+        DB 03H,02H,00H,02H,00H,00H,00H,02H,03H,02H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,03H,03H,02H,00H,00H,00H,00H,00H
+key_next_40: ; key_next_40 (947CH)
+        DB 03H,02H,00H,036H,07AH,0BH,012H,07FH,039H,04H
+        DW key_next_41
+        DW key_variant_41_0
+        DW key_variant_41_1
+        DW key_variant_41_2
+        DW key_variant_41_3
+key_variant_41_0: ; key_variant_41_0 (9490H)
+        DB 00H,00H,01H,00H,00H,00H,01H,00H,00H,03H,03H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_41_1: ; key_variant_41_1 (94B0H)
+        DB 03H,03H,02H,00H,02H,00H,01H,00H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,01H,00H,03H,03H,02H,00H,00H,00H,00H,00H
+key_variant_41_2: ; key_variant_41_2 (94D0H)
+        DB 00H,00H,02H,00H,03H,03H,03H,02H,00H,01H,02H,00H,00H,02H,02H,00H
+        DB 00H,02H,02H,00H,00H,01H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H
+key_variant_41_3: ; key_variant_41_3 (94F0H)
+        DB 03H,03H,03H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,02H,00H,01H,00H,01H,00H,02H,00H,00H,02H,00H,00H,00H,00H
+key_next_41: ; key_next_41 (9510H)
+        DB 03H,08H,00H,042H,07AH,0BH,012H,07FH,045H,04H
+        DW key_next_42
+        DW key_variant_42_0
+        DW key_variant_42_1
+        DW key_variant_42_2
+        DW key_variant_42_3
+key_variant_42_0: ; key_variant_42_0 (9524H)
+        DB 00H,00H,03H,00H,00H,01H,00H,00H,01H,03H,03H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_42_1: ; key_variant_42_1 (9544H)
+        DB 03H,03H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_variant_42_2: ; key_variant_42_2 (9564H)
+        DB 00H,00H,01H,00H,01H,00H,01H,00H,03H,03H,03H,02H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,00H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_42_3: ; key_variant_42_3 (9584H)
+        DB 01H,00H,00H,00H,03H,03H,03H,02H,01H,00H,01H,00H,01H,00H,02H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,00H,03H,03H,02H,00H,00H,00H,00H
+key_next_42: ; key_next_42 (95A4H)
+        DB 03H,010H,00H,04EH,07AH,0BH,012H,07FH,051H,04H
+        DW key_next_43
+        DW key_variant_43_0
+        DW key_variant_43_1
+        DW key_variant_43_2
+        DW key_variant_43_3
+key_variant_43_0: ; key_variant_43_0 (95B8H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,00H,01H,00H,01H,00H
+        DB 00H,03H,03H,00H,00H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_43_1: ; key_variant_43_1 (95D8H)
+        DB 01H,03H,03H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_43_2: ; key_variant_43_2 (95F8H)
+        DB 01H,03H,02H,00H,00H,01H,00H,00H,00H,02H,03H,02H,03H,03H,00H,00H
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,00H,00H,00H,00H,00H
+key_variant_43_3: ; key_variant_43_3 (9618H)
+        DB 02H,00H,00H,02H,01H,00H,00H,02H,01H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_next_43: ; key_next_43 (9638H)
+        DB 03H,020H,00H,05AH,07AH,0BH,012H,07FH,05DH,04H
+        DW key_next_44
+        DW key_variant_44_0
+        DW key_variant_44_1
+        DW key_variant_44_2
+        DW key_variant_44_3
+key_variant_44_0: ; key_variant_44_0 (964CH)
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_44_1: ; key_variant_44_1 (966CH)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_44_2: ; key_variant_44_2 (968CH)
+        DB 01H,03H,03H,00H,00H,01H,00H,00H,01H,03H,03H,00H,00H,01H,00H,00H
+        DB 01H,03H,00H,00H,02H,01H,03H,00H,01H,03H,00H,02H,00H,00H,00H,00H
+key_variant_44_3: ; key_variant_44_3 (96ACH)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,00H,01H,00H,01H,00H,02H,00H
+        DB 00H,03H,00H,00H,00H,01H,00H,00H,00H,00H,02H,00H,00H,00H,00H,00H
+key_next_44: ; key_next_44 (96CCH)
+        DB 03H,080H,00H,066H,07AH,0BH,012H,07FH,069H,04H
+        DW key_next_45
+        DW key_variant_45_0
+        DW key_variant_45_1
+        DW key_variant_45_2
+        DW key_variant_45_3
+key_variant_45_0: ; key_variant_45_0 (96E0H)
+        DB 00H,00H,02H,00H,00H,00H,00H,00H,00H,00H,02H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,01H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_variant_45_1: ; key_variant_45_1 (9700H)
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_45_2: ; key_variant_45_2 (9720H)
+        DB 03H,02H,01H,00H,00H,02H,01H,00H,00H,02H,01H,00H,01H,03H,03H,00H
+        DB 02H,02H,01H,02H,02H,02H,01H,00H,01H,02H,01H,00H,00H,00H,00H,00H
+key_variant_45_3: ; key_variant_45_3 (9740H)
+        DB 03H,03H,00H,00H,00H,00H,03H,02H,03H,00H,00H,00H,00H,03H,02H,00H
+        DB 00H,00H,01H,02H,03H,02H,00H,00H,00H,01H,03H,02H,00H,00H,00H,00H
+key_next_45: ; key_next_45 (9760H)
+        DB 04H,01H,00H,072H,07AH,0BH,012H,07FH,075H,04H
+        DW key_next_46
+        DW key_variant_46_0
+        DW key_variant_46_1
+        DW key_variant_46_2
+        DW key_variant_46_3
+key_variant_46_0: ; key_variant_46_0 (9774H)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,01H,00H,00H,02H,02H,00H
+        DB 00H,03H,00H,00H,00H,02H,02H,00H,00H,02H,01H,00H,00H,00H,00H,00H
+key_variant_46_1: ; key_variant_46_1 (9794H)
+        DB 02H,00H,00H,02H,02H,00H,01H,00H,02H,00H,02H,00H,03H,03H,00H,00H
+        DB 02H,00H,02H,00H,02H,00H,01H,00H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_46_2: ; key_variant_46_2 (97B4H)
+        DB 00H,02H,00H,00H,03H,03H,01H,00H,01H,02H,00H,02H,02H,02H,00H,00H
+        DB 02H,02H,00H,02H,01H,02H,00H,02H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_46_3: ; key_variant_46_3 (97D4H)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,01H,00H,02H,00H
+        DB 01H,00H,01H,00H,02H,00H,03H,02H,03H,03H,00H,02H,00H,00H,00H,00H
+key_next_46: ; key_next_46 (97F4H)
+        DB 04H,02H,00H,07EH,07AH,0BH,012H,07FH,081H,04H
+        DW key_next_47
+        DW key_variant_47_0
+        DW key_variant_47_1
+        DW key_variant_47_2
+        DW key_variant_47_3
+key_variant_47_0: ; key_variant_47_0 (9808H)
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_47_1: ; key_variant_47_1 (9828H)
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_variant_47_2: ; key_variant_47_2 (9848H)
+        DB 01H,00H,02H,00H,01H,00H,02H,00H,01H,03H,03H,00H,03H,01H,00H,02H
+        DB 02H,03H,00H,02H,02H,02H,00H,02H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_47_3: ; key_variant_47_3 (9868H)
+        DB 00H,00H,00H,02H,01H,00H,00H,02H,00H,02H,01H,00H,00H,01H,01H,00H
+        DB 00H,00H,02H,00H,00H,03H,01H,00H,03H,00H,00H,02H,00H,00H,00H,00H
+key_next_47: ; key_next_47 (9888H)
+        DB 01H,080H,00H,08AH,07AH,0BH,012H,07FH,08DH,04H
+        DW key_next_48
+        DW key_variant_48_0
+        DW key_variant_48_0
+        DW key_variant_48_1
+        DW key_variant_48_2
+key_variant_48_0: ; key_variant_48_0 (989CH)
+        DB 00H,00H,00H,00H,00H,03H,00H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+        DB 00H,03H,00H,00H,00H,03H,00H,00H,01H,02H,00H,00H,00H,00H,00H,00H
+key_variant_48_1: ; key_variant_48_1 (98BCH)
+        DB 00H,02H,00H,00H,03H,03H,00H,00H,01H,00H,00H,00H,03H,03H,00H,02H
+        DB 01H,00H,00H,02H,01H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H
+key_variant_48_2: ; key_variant_48_2 (98DCH)
+        DB 03H,03H,03H,02H,00H,02H,00H,00H,03H,03H,03H,02H,00H,02H,00H,00H
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,02H,00H,00H,00H,00H
+key_next_48: ; key_next_48 (98FCH)
+        DB 02H,01H,00H,096H,07AH,0BH,012H,07FH,099H,04H
+        DW key_next_49
+        DW key_variant_49_0
+        DW key_variant_49_0
+        DW key_variant_49_0
+        DW key_variant_49_0
+key_variant_49_0: ; key_variant_49_0 (9910H)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_49: ; key_next_49 (9930H)
+        DB 02H,02H,00H,0A2H,07AH,0BH,012H,07FH,0A5H,04H
+        DW key_next_50
+        DW key_variant_50_0
+        DW key_variant_50_0
+        DW key_variant_50_0
+        DW key_variant_50_0
+key_variant_50_0: ; key_variant_50_0 (9944H)
+        DB 00H,02H,00H,00H,00H,01H,00H,00H,00H,00H,02H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_50: ; key_next_50 (9964H)
+        DB 06H,01H,01H,04H,090H,020H,012H,095H,08H,018H
+        DW key_next_51
+        DW key_variant_51_0
+        DW key_variant_51_0
+        DW key_variant_51_0
+        DW key_variant_51_0
+key_variant_51_0: ; key_variant_51_0 (9978H)
+        DB 01H,03H,03H,00H,00H,02H,00H,00H,02H,00H,00H,01H,00H,00H,00H,03H
+        DB 03H,03H,02H,00H,03H,03H,03H,02H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H
+        DB 02H,00H,00H,00H,00H,02H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H
+        DB 00H,00H,00H,00H,00H,01H,00H,00H,01H,03H,03H,00H,00H,03H,03H,03H
+        DB 02H,00H,00H,01H,00H,00H,00H,03H,03H,03H,00H,00H,00H,01H,00H,00H
+        DB 00H,00H,00H,02H,00H,02H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H
+        DB 00H,00H,00H,00H,00H,01H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,01H,00H,00H
+        DB 01H,03H,03H,00H,00H,02H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H
+        DB 00H,00H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_51: ; key_next_51 (9A38H)
+        DB 05H,080H,00H,025H,090H,0BH,012H,095H,028H,04H
+        DW key_next_52
+        DW key_variant_52_0
+        DW key_variant_52_1
+        DW key_variant_52_2
+        DW key_variant_52_3
+key_variant_52_0: ; key_variant_52_0 (9A4CH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,03H,03H,00H,00H,00H,02H,00H
+        DB 00H,01H,00H,00H,00H,02H,00H,00H,01H,03H,03H,00H,00H,00H,00H,00H
+key_variant_52_1: ; key_variant_52_1 (9A6CH)
+        DB 03H,03H,03H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,00H,00H,01H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_variant_52_2: ; key_variant_52_2 (9A8CH)
+        DB 00H,02H,00H,00H,03H,03H,03H,00H,01H,00H,00H,00H,01H,01H,03H,02H
+        DB 01H,00H,00H,00H,02H,01H,00H,00H,02H,00H,03H,02H,00H,00H,00H,00H
+key_variant_52_3: ; key_variant_52_3 (9AACH)
+        DB 01H,03H,03H,02H,01H,00H,00H,02H,01H,03H,03H,02H,02H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_next_52: ; key_next_52 (9ACCH)
+        DB 05H,020H,00H,031H,090H,0BH,012H,095H,034H,04H
+        DW key_next_53
+        DW key_variant_53_0
+        DW key_variant_53_1
+        DW key_variant_53_2
+        DW key_variant_53_3
+key_variant_53_0: ; key_variant_53_0 (9AE0H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,01H,00H,00H,02H,02H,00H
+        DB 00H,01H,00H,00H,00H,02H,02H,00H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_53_1: ; key_variant_53_1 (9B00H)
+        DB 02H,00H,00H,02H,01H,00H,01H,00H,00H,02H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,02H,00H,01H,00H,01H,00H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_53_2: ; key_variant_53_2 (9B20H)
+        DB 00H,01H,00H,00H,03H,03H,03H,02H,00H,02H,00H,00H,00H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_53_3: ; key_variant_53_3 (9B40H)
+        DB 00H,01H,03H,00H,03H,03H,00H,00H,00H,01H,00H,00H,03H,03H,03H,02H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,03H,02H,00H,00H,00H,00H,00H,00H
+key_next_53: ; key_next_53 (9B60H)
+        DB 03H,01H,00H,03DH,090H,0BH,012H,095H,040H,04H
+        DW key_next_54
+        DW key_variant_54_0
+        DW key_variant_54_1
+        DW key_variant_54_2
+        DW key_variant_54_3
+key_variant_54_0: ; key_variant_54_0 (9B74H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,00H,01H,00H,00H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_54_1: ; key_variant_54_1 (9B94H)
+        DB 01H,03H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,03H,02H,00H,00H,00H,00H
+key_variant_54_2: ; key_variant_54_2 (9BB4H)
+        DB 00H,00H,00H,00H,00H,03H,03H,00H,03H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,00H,01H,02H,00H,00H,00H,00H,00H
+key_variant_54_3: ; key_variant_54_3 (9BD4H)
+        DB 02H,02H,00H,02H,02H,02H,00H,02H,02H,02H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_next_54: ; key_next_54 (9BF4H)
+        DB 05H,08H,00H,049H,090H,0BH,012H,095H,04CH,04H
+        DW key_next_55
+        DW key_variant_55_0
+        DW key_variant_55_1
+        DW key_variant_55_2
+        DW key_variant_55_3
+key_variant_55_0: ; key_variant_55_0 (9C08H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 00H,02H,02H,00H,00H,02H,02H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_55_1: ; key_variant_55_1 (9C28H)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 00H,02H,02H,00H,00H,02H,02H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_55_2: ; key_variant_55_2 (9C48H)
+        DB 00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,00H,00H,00H,00H,00H
+key_variant_55_3: ; key_variant_55_3 (9C68H)
+        DB 01H,03H,03H,00H,00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,01H,00H,00H,01H,02H,00H,00H,00H,00H,00H,00H
+key_next_55: ; key_next_55 (9C88H)
+        DB 02H,080H,00H,055H,090H,0BH,012H,095H,058H,04H
+        DW key_next_56
+        DW key_variant_56_0
+        DW key_variant_56_1
+        DW key_variant_56_2
+        DW key_variant_56_3
+key_variant_56_0: ; key_variant_56_0 (9C9CH)
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_variant_56_1: ; key_variant_56_1 (9CBCH)
+        DB 03H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,00H,00H,00H,00H,00H
+key_variant_56_2: ; key_variant_56_2 (9CDCH)
+        DB 02H,00H,00H,02H,01H,00H,03H,00H,00H,03H,00H,00H,01H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,01H,03H,03H,02H,00H,00H,00H,00H
+key_variant_56_3: ; key_variant_56_3 (9CFCH)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,00H,03H,00H,00H,00H,02H,02H,00H
+        DB 00H,02H,01H,02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H
+key_next_56: ; key_next_56 (9D1CH)
+        DB 04H,08H,00H,061H,090H,0BH,012H,095H,064H,04H
+        DW key_next_57
+        DW key_variant_57_0
+        DW key_variant_57_1
+        DW key_variant_57_2
+        DW key_variant_57_3
+key_variant_57_0: ; key_variant_57_0 (9D30H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,03H,02H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,01H,00H,00H,00H,00H,00H
+key_variant_57_1: ; key_variant_57_1 (9D50H)
+        DB 02H,00H,00H,02H,03H,00H,00H,02H,02H,02H,00H,02H,02H,01H,00H,02H
+        DB 02H,00H,02H,02H,02H,00H,01H,02H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_57_2: ; key_variant_57_2 (9D70H)
+        DB 00H,01H,00H,00H,01H,00H,03H,00H,00H,03H,00H,02H,03H,02H,00H,02H
+        DB 00H,02H,01H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_57_3: ; key_variant_57_3 (9D90H)
+        DB 01H,00H,01H,02H,01H,01H,02H,02H,03H,02H,00H,02H,00H,02H,01H,00H
+        DB 00H,02H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_next_57: ; key_next_57 (9DB0H)
+        DB 04H,04H,00H,06DH,090H,0BH,012H,095H,070H,04H
+        DW key_next_58
+        DW key_variant_58_0
+        DW key_variant_58_1
+        DW key_variant_58_2
+        DW key_variant_58_3
+key_variant_58_0: ; key_variant_58_0 (9DC4H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,02H,02H,00H,01H,01H,01H,00H
+        DB 01H,01H,01H,00H,01H,01H,01H,00H,01H,01H,01H,00H,00H,00H,00H,00H
+key_variant_58_1: ; key_variant_58_1 (9DE4H)
+        DB 02H,00H,00H,02H,03H,00H,01H,02H,02H,02H,02H,02H,02H,01H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,00H
+key_variant_58_2: ; key_variant_58_2 (9E04H)
+        DB 00H,00H,02H,00H,02H,01H,03H,00H,02H,02H,02H,02H,03H,00H,02H,02H
+        DB 02H,02H,02H,02H,02H,01H,03H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_variant_58_3: ; key_variant_58_3 (9E24H)
+        DB 01H,03H,03H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,02H,00H
+        DB 00H,00H,02H,00H,00H,00H,02H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_58: ; key_next_58 (9E44H)
+        DB 02H,04H,00H,079H,090H,0BH,012H,095H,07CH,04H
+        DW key_next_59
+        DW key_variant_59_0
+        DW key_variant_59_0
+        DW key_variant_59_1
+        DW key_variant_59_2
+key_variant_59_0: ; key_variant_59_0 (9E58H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_variant_59_1: ; key_variant_59_1 (9E78H)
+        DB 00H,03H,00H,00H,00H,01H,03H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 01H,03H,00H,00H,02H,01H,03H,00H,01H,03H,00H,02H,00H,00H,00H,00H
+key_variant_59_2: ; key_variant_59_2 (9E98H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_59: ; key_next_59 (9EB8H)
+        DB 02H,08H,00H,085H,090H,0BH,012H,095H,088H,04H
+        DW key_next_60
+        DW key_variant_60_0
+        DW key_variant_60_0
+        DW key_variant_60_1
+        DW key_variant_60_2
+key_variant_60_0: ; key_variant_60_0 (9ECCH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_variant_60_1: ; key_variant_60_1 (9EECH)
+        DB 01H,00H,00H,00H,01H,02H,00H,00H,03H,01H,03H,00H,01H,02H,00H,02H
+        DB 01H,00H,00H,02H,03H,00H,00H,02H,01H,00H,03H,00H,00H,00H,00H,00H
+key_variant_60_2: ; key_variant_60_2 (9F0CH)
+        DB 03H,03H,03H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,01H,00H,00H,00H,02H,00H,00H,03H,00H,00H,00H,00H,00H,00H
+key_next_60: ; key_next_60 (9F2CH)
+        DB 02H,010H,00H,091H,090H,0BH,012H,095H,094H,04H
+        DW key_next_61
+        DW key_variant_61_0
+        DW key_variant_61_0
+        DW key_variant_61_1
+        DW key_variant_61_2
+key_variant_61_0: ; key_variant_61_0 (9F40H)
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_variant_61_1: ; key_variant_61_1 (9F60H)
+        DB 00H,03H,02H,00H,01H,00H,01H,00H,01H,00H,01H,00H,00H,00H,02H,00H
+        DB 00H,01H,00H,00H,00H,00H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_61_2: ; key_variant_61_2 (9F80H)
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,03H,03H,03H,02H,00H,00H,00H,02H
+        DB 00H,00H,01H,00H,00H,01H,02H,00H,03H,02H,00H,00H,00H,00H,00H,00H
+key_next_61: ; key_next_61 (9FA0H)
+        DB 02H,020H,00H,09DH,090H,0BH,012H,095H,0A0H,04H
+        DW key_next_62
+        DW key_variant_62_0
+        DW key_variant_62_0
+        DW key_variant_62_1
+        DW key_variant_62_2
+key_variant_62_0: ; key_variant_62_0 (9FB4H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_variant_62_1: ; key_variant_62_1 (9FD4H)
+        DB 00H,02H,00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,01H,02H,00H,00H
+        DB 01H,01H,00H,02H,02H,01H,00H,02H,02H,00H,03H,00H,00H,00H,00H,00H
+key_variant_62_2: ; key_variant_62_2 (9FF4H)
+        DB 03H,02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,01H,03H,02H,00H,00H,00H,00H,00H
+key_next_62: ; key_next_62 (A014H)
+        DB 06H,01H,01H,0A9H,090H,017H,012H,095H,0B0H,09H
+        DW key_next_63
+        DW key_variant_63_0
+        DW key_variant_63_0
+        DW key_variant_63_0
+        DW key_variant_63_0
+key_variant_63_0: ; key_variant_63_0 (A028H)
+        DB 01H,03H,03H,00H,00H,02H,00H,00H,02H,02H,00H,00H,02H,00H,02H,00H
+        DB 00H,02H,02H,00H,00H,00H,00H,02H,00H,00H,02H,01H,03H,03H,00H,00H
+        DB 03H,03H,03H,02H,00H,00H,00H,02H,00H,02H,00H,00H,02H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,01H,03H,03H,00H,00H,02H,00H,00H,02H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_63: ; key_next_63 (A070H)
+        DB 06H,08H,01H,01CH,0A6H,015H,012H,0ABH,01FH,0EH
+        DW key_next_64
+        DW key_variant_64_0
+        DW key_variant_64_0
+        DW key_variant_64_0
+        DW key_variant_64_0
+key_variant_64_0: ; key_variant_64_0 (A084H)
+        DB 01H,03H,03H,02H,00H,01H,03H,03H,00H,00H,03H,03H,03H,00H,02H,00H
+        DB 00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,02H,00H,00H,00H
+        DB 00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,02H,00H,00H,00H,00H,03H
+        DB 03H,03H,02H,00H,03H,03H,03H,00H,02H,00H,00H,00H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H
+        DB 02H,00H,00H,00H,01H,03H,03H,02H,00H,02H,00H,00H,02H,00H,02H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_64: ; key_next_64 (A0F4H)
+        DB 06H,04H,01H,033H,0A6H,019H,012H,0ABH,036H,013H
+        DW key_next_65
+        DW key_variant_65_0
+        DW key_variant_65_0
+        DW key_variant_65_0
+        DW key_variant_65_0
+key_variant_65_0: ; key_variant_65_0 (A108H)
+        DB 01H,03H,03H,00H,00H,03H,03H,03H,00H,00H,03H,03H,03H,00H,00H,02H
+        DB 00H,00H,02H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H
+        DB 02H,00H,00H,02H,00H,02H,00H,00H,02H,02H,01H,03H,02H,00H,03H,03H
+        DB 03H,00H,00H,03H,03H,03H,00H,00H,03H,03H,03H,02H,02H,00H,00H,02H
+        DB 00H,02H,00H,02H,00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,02H,02H
+        DB 00H,00H,02H,00H,02H,00H,01H,00H,00H,02H,00H,00H,00H,00H,02H,00H
+        DB 00H,02H,01H,03H,03H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H
+        DB 00H,02H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_65: ; key_next_65 (A1A0H)
+        DB 08H,01H,00H,04EH,0A6H,04AH,012H,0ABH,067H,018H
+        DW key_next_66
+        DW key_variant_66_0
+        DW key_variant_66_0
+        DW key_variant_66_0
+        DW key_variant_66_0
+key_variant_66_0: ; key_variant_66_0 (A1B4H)
+        DB 01H,03H,03H,00H,00H,03H,03H,03H,00H,00H,01H,03H,03H,00H,00H,01H
+        DB 03H,03H,02H,00H,03H,03H,03H,02H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,02H
+        DB 00H,00H,00H,00H,02H,00H,00H,00H,01H,03H,03H,00H,00H,03H,03H,03H
+        DB 00H,00H,03H,03H,03H,02H,00H,02H,00H,00H,00H,00H,03H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H,02H
+        DB 00H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H
+        DB 00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H
+        DB 01H,03H,03H,00H,00H,02H,00H,00H,00H,00H,02H,00H,00H,02H,00H,01H
+        DB 03H,03H,02H,00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_66: ; key_next_66 (A274H)
+        DB 06H,010H,01H,09AH,0A6H,019H,012H,0ABH,09DH,013H
+        DW key_next_67
+        DW key_variant_67_0
+        DW key_variant_67_0
+        DW key_variant_67_0
+        DW key_variant_67_0
+key_variant_67_0: ; key_variant_67_0 (A288H)
+        DB 02H,00H,00H,02H,00H,01H,03H,03H,00H,00H,02H,00H,00H,02H,00H,01H
+        DB 03H,03H,00H,02H,00H,01H,00H,00H,02H,00H,00H,02H,00H,03H,00H,00H
+        DB 02H,00H,02H,00H,00H,02H,02H,00H,02H,00H,00H,02H,00H,00H,02H,00H
+        DB 02H,02H,00H,02H,00H,02H,00H,00H,02H,03H,03H,00H,00H,00H,03H,03H
+        DB 03H,02H,00H,02H,01H,00H,02H,00H,03H,03H,03H,02H,02H,00H,02H,00H
+        DB 00H,02H,00H,00H,02H,00H,02H,00H,02H,02H,00H,02H,00H,00H,02H,02H
+        DB 00H,01H,00H,00H,02H,00H,00H,02H,00H,02H,00H,01H,02H,00H,02H,00H
+        DB 00H,02H,02H,00H,00H,02H,00H,02H,00H,00H,02H,00H,02H,00H,00H,02H
+        DB 00H,02H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H
+key_next_67: ; key_next_67 (A320H)
+        DB 07H,040H,01H,0B5H,0A6H,017H,012H,0ABH,0B9H,0EH
+        DW key_next_68
+        DW key_variant_68_0
+        DW key_variant_68_0
+        DW key_variant_68_0
+        DW key_variant_68_0
+key_variant_68_0: ; key_variant_68_0 (A334H)
+        DB 01H,03H,03H,00H,00H,03H,03H,03H,02H,00H,02H,00H,00H,00H,02H,00H
+        DB 00H,02H,00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 00H,02H,00H,00H,00H,00H,02H,00H,00H,00H,01H,03H,03H,00H,00H,03H
+        DB 03H,03H,00H,00H,02H,00H,00H,00H,00H,00H,00H,02H,00H,02H,00H,00H
+        DB 00H,00H,02H,00H,00H,00H,02H,00H,00H,02H,00H,02H,00H,00H,00H,00H
+        DB 02H,00H,00H,00H,01H,03H,03H,00H,00H,03H,03H,03H,02H,00H,03H,03H
+        DB 03H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_68: ; key_next_68 (A3A4H)
+        DB 08H,020H,01H,0D3H,020H,028H,012H,025H,0E5H,04H
+        DW key_next_69
+        DW key_variant_69_0
+        DW key_variant_69_1
+        DW key_variant_69_1
+        DW key_variant_69_1
+key_variant_69_0: ; key_variant_69_0 (A3B8H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,01H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_69_1: ; key_variant_69_1 (A3D8H)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_next_69: ; key_next_69 (A3F8H)
+        DB 08H,010H,01H,0D3H,034H,013H,012H,039H,0DAH,04H
+        DW key_next_70
+        DW key_variant_70_0
+        DW key_variant_70_1
+        DW key_variant_70_1
+        DW key_variant_70_1
+key_variant_70_0: ; key_variant_70_0 (A40CH)
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_variant_70_1: ; key_variant_70_1 (A42CH)
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_70: ; key_next_70 (A44CH)
+        DB 08H,080H,01H,0E8H,034H,013H,012H,039H,0EFH,04H
+        DW key_next_71
+        DW key_variant_71_0
+        DW key_variant_71_1
+        DW key_variant_71_1
+        DW key_variant_71_1
+key_variant_71_0: ; key_variant_71_0 (A460H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,01H,01H,02H,00H,01H,02H,01H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H
+key_variant_71_1: ; key_variant_71_1 (A480H)
+        DB 03H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,00H
+        DB 02H,00H,02H,00H,02H,00H,01H,00H,02H,00H,00H,02H,00H,00H,00H,00H
+key_next_71: ; key_next_71 (A4A0H)
+        DB 08H,040H,01H,0D3H,048H,028H,012H,04DH,0E5H,04H
+        DW key_next_72
+        DW key_variant_72_0
+        DW key_variant_72_1
+        DW key_variant_72_1
+        DW key_variant_72_1
+key_variant_72_0: ; key_variant_72_0 (A4B4H)
+        DB 00H,00H,01H,00H,00H,00H,01H,00H,00H,03H,03H,00H,01H,00H,01H,00H
+        DB 01H,00H,01H,00H,01H,00H,01H,00H,00H,03H,03H,00H,00H,00H,00H,00H
+key_variant_72_1: ; key_variant_72_1 (A4D4H)
+        DB 03H,03H,02H,00H,02H,00H,01H,00H,02H,00H,00H,02H,02H,00H,00H,02H
+        DB 02H,00H,00H,02H,02H,00H,01H,00H,03H,03H,02H,00H,00H,00H,00H,00H
+key_next_72: ; key_next_72 (A4F4H)
+        DB 0AH,04H,00H,0D4H,064H,09H,012H,069H,0D6H,04H
+        DW key_next_73
+        DW key_variant_73_0
+        DW key_variant_73_0
+        DW key_variant_73_0
+        DW key_variant_73_0
+key_variant_73_0: ; key_variant_73_0 (A508H)
+        DB 03H,03H,03H,02H,02H,00H,00H,02H,02H,00H,00H,02H,00H,00H,00H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H
+key_next_73: ; key_next_73 (A528H)
+        DB 0AH,08H,00H,0DEH,064H,09H,012H,069H,0E0H,04H
+        DW key_next_74
+        DW key_variant_74_0
+        DW key_variant_74_0
+        DW key_variant_74_0
+        DW key_variant_74_0
+key_variant_74_0: ; key_variant_74_0 (A53CH)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_next_74: ; key_next_74 (A55CH)
+        DB 0AH,010H,00H,0E8H,064H,09H,012H,069H,0EAH,04H
+        DW key_next_75
+        DW key_variant_75_0
+        DW key_variant_75_0
+        DW key_variant_75_0
+        DW key_variant_75_0
+key_variant_75_0: ; key_variant_75_0 (A570H)
+        DB 01H,03H,03H,00H,02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_next_75: ; key_next_75 (A590H)
+        DB 0AH,020H,01H,0F2H,064H,09H,012H,069H,0F4H,04H
+        DW key_next_76
+        DW key_variant_76_0
+        DW key_variant_76_0
+        DW key_variant_76_0
+        DW key_variant_76_0
+key_variant_76_0: ; key_variant_76_0 (A5A4H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,01H,03H,03H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_76: ; key_next_76 (A5C4H)
+        DB 09H,080H,00H,0D4H,07AH,09H,012H,07FH,0D6H,04H
+        DW key_next_77
+        DW key_variant_77_0
+        DW key_variant_77_0
+        DW key_variant_77_0
+        DW key_variant_77_0
+key_variant_77_0: ; key_variant_77_0 (A5D8H)
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,02H,00H,00H,02H,03H,03H,03H,02H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,02H,00H,00H,00H,00H
+key_next_77: ; key_next_77 (A5F8H)
+        DB 0AH,01H,00H,0DEH,07AH,09H,012H,07FH,0E0H,04H
+        DW key_next_78
+        DW key_variant_78_0
+        DW key_variant_78_0
+        DW key_variant_78_0
+        DW key_variant_78_0
+key_variant_78_0: ; key_variant_78_0 (A60CH)
+        DB 03H,03H,03H,02H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,00H,00H,00H,00H,00H
+key_next_78: ; key_next_78 (A62CH)
+        DB 0AH,02H,00H,0E8H,07AH,09H,012H,07FH,0EAH,04H
+        DW key_next_79
+        DW key_variant_79_0
+        DW key_variant_79_0
+        DW key_variant_79_0
+        DW key_variant_79_0
+key_variant_79_0: ; key_variant_79_0 (A640H)
+        DB 01H,03H,03H,00H,02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,00H
+        DB 02H,00H,00H,02H,02H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_next_79: ; key_next_79 (A660H)
+        DB 09H,01H,01H,0F2H,07AH,09H,012H,07FH,0F4H,04H
+        DW key_next_80
+        DW key_variant_80_0
+        DW key_variant_80_0
+        DW key_variant_80_0
+        DW key_variant_80_0
+key_variant_80_0: ; key_variant_80_0 (A674H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,02H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,02H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_80: ; key_next_80 (A694H)
+        DB 09H,010H,00H,0D4H,090H,09H,012H,095H,0D6H,04H
+        DW key_next_81
+        DW key_variant_81_0
+        DW key_variant_81_0
+        DW key_variant_81_0
+        DW key_variant_81_0
+key_variant_81_0: ; key_variant_81_0 (A6A8H)
+        DB 00H,01H,00H,00H,00H,03H,00H,00H,01H,01H,00H,00H,00H,01H,00H,00H
+        DB 00H,01H,00H,00H,00H,01H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H
+key_next_81: ; key_next_81 (A6C8H)
+        DB 09H,020H,00H,0DEH,090H,09H,012H,095H,0E0H,04H
+        DW key_next_82
+        DW key_variant_82_0
+        DW key_variant_82_0
+        DW key_variant_82_0
+        DW key_variant_82_0
+key_variant_82_0: ; key_variant_82_0 (A6DCH)
+        DB 03H,03H,03H,00H,00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H
+        DB 02H,00H,00H,00H,02H,00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H
+key_next_82: ; key_next_82 (A6FCH)
+        DB 09H,040H,00H,0E8H,090H,09H,012H,095H,0EAH,04H
+        DW key_next_83
+        DW key_variant_83_0
+        DW key_variant_83_0
+        DW key_variant_83_0
+        DW key_variant_83_0
+key_variant_83_0: ; key_variant_83_0 (A710H)
+        DB 03H,03H,03H,00H,00H,00H,00H,02H,00H,00H,00H,02H,01H,03H,03H,00H
+        DB 00H,00H,00H,02H,00H,00H,00H,02H,03H,03H,03H,00H,00H,00H,00H,00H
+key_next_83: ; key_next_83 (A730H)
+        DB 09H,04H,01H,0F2H,090H,09H,012H,095H,0F4H,04H
+        DW key_next_84
+        DW key_variant_84_0
+        DW key_variant_84_0
+        DW key_variant_84_0
+        DW key_variant_84_0
+key_variant_84_0: ; key_variant_84_0 (A744H)
+        DB 00H,00H,00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,01H,00H,00H
+        DB 00H,02H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_next_84: ; key_next_84 (A764H)
+        DB 09H,08H,00H,0D4H,0A6H,09H,012H,0ABH,0D6H,04H
+        DW key_next_85
+        DW key_variant_85_0
+        DW key_variant_85_0
+        DW key_variant_85_0
+        DW key_variant_85_0
+key_variant_85_0: ; key_variant_85_0 (A778H)
+        DB 01H,03H,03H,00H,02H,00H,01H,02H,02H,00H,02H,02H,02H,01H,00H,02H
+        DB 02H,02H,00H,02H,03H,00H,00H,02H,01H,03H,03H,00H,00H,00H,00H,00H
+key_next_85: ; key_next_85 (A798H)
+        DB 0AH,040H,00H,0DEH,0A6H,09H,012H,0ABH,0E0H,04H
+        DW key_next_86
+        DW key_variant_86_0
+        DW key_variant_86_0
+        DW key_variant_86_0
+        DW key_variant_86_0
+key_variant_86_0: ; key_variant_86_0 (A7ACH)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 01H,00H,00H,00H,01H,00H,00H,00H,02H,00H,00H,00H,00H,00H,00H,00H
+key_next_86: ; key_next_86 (A7CCH)
+        DB 0AH,080H,00H,0E8H,0A6H,09H,012H,0ABH,0EAH,04H
+        DW key_next_87
+        DW key_variant_87_0
+        DW key_variant_87_0
+        DW key_variant_87_0
+        DW key_variant_87_0
+key_variant_87_0: ; key_variant_87_0 (A7E0H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,01H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_87: ; key_next_87 (A800H)
+        DB 09H,02H,01H,0F2H,0A6H,09H,012H,0ABH,0F4H,04H
+        DW key_next_88
+        DW key_variant_88_0
+        DW key_variant_88_0
+        DW key_variant_88_0
+        DW key_variant_88_0
+key_variant_88_0: ; key_variant_88_0 (A814H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,01H,00H,00H,00H,03H,02H,00H
+        DB 00H,01H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+key_next_88: ; key_next_88 (A834H)
+        DB 0FFH
+brand_sony: ; brand_sony (A835H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,03H,03H,03H,03H
+        DB 03H,02H,01H,02H,00H,00H,00H,00H,01H,03H,03H,03H,03H,00H,00H,00H
+        DB 00H,03H,03H,03H,02H,00H,00H,00H,03H,03H,03H,02H,01H,03H,03H,03H
+        DB 03H,02H,00H,01H,03H,03H,03H,02H,00H,03H,03H,03H,00H,00H,03H,03H
+        DB 03H,02H,00H,00H,01H,03H,03H,02H,00H,00H,03H,03H,02H,00H,00H,00H
+        DB 03H,03H,03H,00H,00H,00H,00H,03H,02H,00H,00H,01H,03H,03H,02H,00H
+        DB 00H,00H,01H,03H,02H,00H,01H,03H,03H,00H,00H,00H,00H,01H,03H,02H
+        DB 00H,00H,03H,03H,03H,00H,00H,00H,01H,03H,03H,00H,00H,00H,03H,03H
+        DB 03H,02H,00H,00H,00H,03H,02H,00H,00H,00H,03H,03H,03H,00H,00H,00H
+        DB 03H,03H,00H,00H,01H,03H,03H,00H,00H,00H,00H,00H,03H,02H,00H,01H
+        DB 03H,03H,02H,00H,00H,00H,00H,03H,03H,02H,00H,00H,03H,03H,03H,03H
+        DB 00H,00H,00H,03H,02H,00H,00H,00H,01H,03H,03H,02H,00H,01H,03H,02H
+        DB 00H,00H,00H,03H,03H,03H,03H,03H,03H,00H,00H,00H,00H,01H,03H,03H
+        DB 00H,00H,00H,00H,00H,01H,03H,03H,00H,00H,03H,03H,03H,03H,03H,00H
+        DB 00H,03H,02H,00H,00H,00H,00H,01H,03H,03H,03H,03H,02H,00H,00H,00H
+        DB 00H,01H,03H,03H,03H,03H,03H,03H,03H,00H,00H,01H,03H,03H,00H,00H
+        DB 00H,00H,00H,01H,03H,03H,00H,00H,03H,02H,03H,03H,03H,02H,00H,03H
+        DB 02H,00H,00H,00H,00H,00H,03H,03H,03H,03H,00H,00H,00H,00H,00H,00H
+        DB 03H,03H,03H,03H,03H,03H,03H,02H,00H,01H,03H,03H,00H,00H,00H,00H
+        DB 00H,01H,03H,03H,00H,00H,03H,02H,01H,03H,03H,03H,00H,03H,02H,00H
+        DB 00H,00H,00H,00H,01H,03H,03H,02H,00H,00H,00H,00H,00H,00H,00H,01H
+        DB 03H,03H,03H,03H,03H,03H,00H,01H,03H,03H,00H,00H,00H,00H,00H,01H
+        DB 03H,03H,00H,00H,03H,02H,00H,03H,03H,03H,02H,03H,02H,00H,00H,00H
+        DB 00H,00H,01H,03H,03H,00H,00H,00H,00H,00H,00H,03H,02H,00H,00H,00H
+        DB 00H,01H,03H,03H,00H,01H,03H,03H,02H,00H,00H,00H,00H,01H,03H,03H
+        DB 00H,00H,03H,02H,00H,00H,03H,03H,03H,03H,02H,00H,00H,00H,00H,00H
+        DB 01H,03H,03H,00H,00H,00H,00H,00H,00H,03H,03H,00H,00H,00H,00H,01H
+        DB 03H,03H,00H,00H,03H,03H,03H,00H,00H,00H,00H,03H,03H,02H,00H,00H
+        DB 03H,02H,00H,00H,01H,03H,03H,03H,02H,00H,00H,00H,00H,00H,01H,03H
+        DB 03H,00H,00H,00H,00H,00H,00H,03H,03H,03H,02H,00H,00H,03H,03H,02H
+        DB 00H,00H,01H,03H,03H,02H,00H,00H,01H,03H,03H,00H,00H,00H,03H,02H
+        DB 00H,00H,00H,03H,03H,03H,02H,00H,00H,00H,00H,00H,01H,03H,03H,00H
+        DB 00H,00H,00H,00H,00H,03H,00H,03H,03H,03H,03H,03H,02H,00H,00H,00H
+        DB 00H,00H,03H,03H,03H,03H,03H,02H,00H,00H,00H,03H,03H,03H,02H,00H
+        DB 00H,00H,01H,03H,02H,00H,00H,00H,00H,01H,03H,03H,03H,03H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+brand_hitbit: ; brand_hitbit (AB43H)
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,01H
+        DB 03H,03H,03H,01H,03H,03H,03H,00H,03H,03H,03H,02H,01H,03H,03H,03H
+        DB 03H,03H,03H,03H,00H,00H,03H,03H,03H,03H,03H,02H,00H,00H,00H,03H
+        DB 03H,03H,02H,01H,03H,03H,03H,03H,03H,03H,03H,00H,00H,01H,03H,03H
+        DB 03H,01H,03H,03H,03H,00H,03H,03H,03H,02H,01H,03H,03H,03H,03H,03H
+        DB 03H,03H,00H,00H,03H,03H,03H,03H,03H,03H,02H,00H,00H,03H,03H,03H
+        DB 02H,01H,03H,03H,03H,03H,03H,03H,03H,00H,00H,01H,03H,03H,03H,01H
+        DB 03H,03H,03H,00H,03H,03H,03H,02H,01H,03H,03H,03H,03H,03H,03H,03H
+        DB 00H,00H,03H,03H,03H,03H,03H,03H,03H,00H,00H,03H,03H,03H,02H,01H
+        DB 03H,03H,03H,03H,03H,03H,03H,00H,00H,01H,03H,03H,03H,01H,03H,03H
+        DB 03H,00H,03H,03H,03H,02H,01H,03H,03H,03H,03H,03H,03H,03H,00H,00H
+        DB 03H,03H,03H,02H,03H,03H,03H,02H,00H,03H,03H,03H,02H,01H,03H,03H
+        DB 03H,03H,03H,03H,03H,00H,00H,01H,03H,03H,02H,01H,03H,03H,03H,00H
+        DB 03H,03H,03H,02H,01H,03H,03H,03H,03H,03H,03H,03H,00H,00H,03H,03H
+        DB 03H,02H,03H,03H,03H,02H,00H,03H,03H,03H,02H,01H,03H,03H,03H,03H
+        DB 03H,03H,03H,00H,00H,01H,03H,03H,03H,03H,03H,03H,03H,00H,03H,03H
+        DB 02H,00H,00H,00H,01H,03H,03H,00H,00H,00H,00H,00H,03H,03H,03H,02H
+        DB 03H,03H,03H,00H,00H,03H,03H,02H,00H,00H,00H,01H,03H,03H,00H,00H
+        DB 00H,00H,00H,01H,03H,03H,03H,03H,03H,03H,03H,00H,03H,03H,03H,02H
+        DB 00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,03H,03H,03H,02H,03H,03H
+        DB 03H,00H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H
+        DB 00H,01H,03H,03H,03H,03H,03H,03H,03H,00H,03H,03H,03H,02H,00H,00H
+        DB 01H,03H,03H,03H,00H,00H,00H,00H,03H,03H,03H,03H,03H,03H,02H,00H
+        DB 00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,01H
+        DB 03H,03H,03H,03H,03H,03H,03H,00H,03H,03H,03H,02H,00H,00H,01H,03H
+        DB 03H,03H,00H,00H,00H,00H,03H,03H,03H,02H,03H,03H,03H,02H,00H,03H
+        DB 03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,01H,03H,03H
+        DB 00H,00H,03H,03H,03H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H
+        DB 00H,00H,00H,00H,03H,03H,03H,02H,03H,03H,03H,03H,00H,03H,03H,03H
+        DB 02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,01H,03H,03H,02H,01H
+        DB 03H,03H,03H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,03H,03H,03H,03H,00H,03H,03H,03H,02H,00H
+        DB 00H,01H,03H,03H,03H,00H,00H,00H,00H,01H,03H,03H,03H,01H,03H,03H
+        DB 03H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H
+        DB 03H,03H,03H,03H,03H,03H,03H,03H,00H,03H,03H,03H,02H,00H,00H,01H
+        DB 03H,03H,03H,00H,00H,00H,00H,01H,03H,03H,03H,01H,03H,03H,03H,00H
+        DB 03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,03H,03H
+        DB 03H,03H,03H,03H,03H,02H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H
+        DB 03H,00H,00H,00H,00H,01H,03H,03H,03H,01H,03H,03H,03H,00H,03H,03H
+        DB 03H,02H,00H,00H,01H,03H,03H,03H,00H,00H,00H,00H,03H,03H,03H,03H
+        DB 03H,03H,03H,02H,00H,03H,03H,03H,02H,00H,00H,01H,03H,03H,03H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        DB 00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H,00H
+        REPT 4481
+        DB 0FFH
+        ENDM
+        END
